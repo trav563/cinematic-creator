@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
+import { ProjectCard } from "./project-card";
 
 export default async function ProjectsPage() {
   const supabase = await createSupabaseServerClient();
@@ -32,17 +33,7 @@ export default async function ProjectsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((p) => (
-            <Link
-              key={p.id}
-              href={`/projects/${p.id}`}
-              className="group rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 transition-colors hover:bg-[var(--surface-2)]"
-            >
-              <div className="aspect-video w-full overflow-hidden rounded bg-[var(--surface-2)]" />
-              <div className="mt-3 flex items-center justify-between">
-                <h3 className="text-sm font-medium">{p.title}</h3>
-                <span className="text-xs text-[var(--muted)]">{p.status}</span>
-              </div>
-            </Link>
+            <ProjectCard key={p.id} project={p} />
           ))}
         </div>
       )}

@@ -152,6 +152,96 @@ export async function confirmVariation(
 }
 
 /**
+ * Bulk-generate variations for every asset that has reference images but no variations
+ * yet. Skips assets without refs (can't generate without input) and assets that
+ * already have variations (avoid clobbering manual work). One Inngest event per
+ * eligible asset; the worker concurrency limit handles throttling.
+ */
+export async function generateAllAssetVariations(
+  projectId: string,
+): Promise<Result<{ count: number; skipped: number }>> {
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false, error: "Not signed in" };
+
+  const { data: keyRow } = await supabase
+    .from("provider_credentials")
+    .select("provider")
+    .eq("provider", "google_ai_studio")
+    .single();
+  if (!keyRow) {
+    return { ok: false, error: "Add a Google AI Studio API key at Settings → API Keys first." };
+  }
+
+  // Pull all assets + their existing variations to determine which need generation.
+  const { data: assets } = await supabase
+    .from("assets")
+    .select(
+      `
+      id,
+      name,
+      reference_image_urls,
+      asset_variations!asset_variations_asset_id_fkey(id)
+    `,
+    )
+    .eq("project_id", projectId);
+
+  type AssetRow = {
+    id: string;
+    name: string;
+    reference_image_urls: string[] | null;
+    asset_variations: { id: string }[] | null;
+  };
+  const eligible: AssetRow[] = ((assets ?? []) as AssetRow[]).filter((a) => {
+    const refs = a.reference_image_urls ?? [];
+    const variations = a.asset_variations ?? [];
+    return refs.length > 0 && variations.length === 0;
+  });
+  const skipped = (assets?.length ?? 0) - eligible.length;
+
+  if (eligible.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Nothing to generate. Every asset either has no reference images uploaded yet, or already has variations.",
+    };
+  }
+
+  const jobRows = eligible.map((a) => ({
+    project_id: projectId,
+    user_id: userData.user!.id,
+    type: "image_generate",
+    status: "queued",
+    provider: "google_ai_studio",
+    request: { assetId: a.id },
+  }));
+  const { data: insertedJobs, error: jobErr } = await supabase
+    .from("jobs")
+    .insert(jobRows)
+    .select("id, request");
+  if (jobErr || !insertedJobs) {
+    return { ok: false, error: jobErr?.message ?? "Failed to enqueue jobs" };
+  }
+
+  const events = insertedJobs.map((j) => {
+    const req = j.request as { assetId: string };
+    return {
+      name: "asset/generate_variation" as const,
+      data: {
+        jobId: j.id,
+        projectId,
+        assetId: req.assetId,
+        userId: userData.user!.id,
+      },
+    };
+  });
+  await inngest.send(events);
+
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, data: { count: eligible.length, skipped } };
+}
+
+/**
  * Manually add an asset to an existing project. Used when parse_script didn't extract
  * something (or when the project predates the assets feature). Once created, the asset
  * shows up on the Assets tab — upload refs and generate variations the same as any

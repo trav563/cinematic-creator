@@ -2,6 +2,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { signedUrl } from "@/lib/storage";
 import { AssetCard } from "./asset-card";
 import { AddAssetForm } from "./add-asset-form";
+import { AssetsHeader } from "./assets-header";
 
 const KIND_LABELS: Record<string, string> = {
   character: "Characters",
@@ -99,14 +100,23 @@ export async function AssetsTab({ projectId }: { projectId: string }) {
     grouped.get(key)!.push(asset);
   }
 
+  // Counter math for the header
+  const totalAssets = enriched.length;
+  const confirmedAssets = enriched.filter((a) => a.confirmed_variation_id).length;
+  const generatedAssets = enriched.filter((a) => a.variations.length > 0).length;
+  const eligibleForBulk = enriched.filter(
+    (a) => a.refs.length > 0 && a.variations.length === 0,
+  ).length;
+
   return (
     <div className="space-y-8">
-      <div className="flex items-start justify-between gap-4">
-        <p className="text-xs text-[var(--muted)]">
-          Assets are reusable references for scene generation. Upload refs, confirm a variation, and any scene that names the asset (verbatim snake_case) will use it.
-        </p>
-        <AddAssetForm projectId={projectId} />
-      </div>
+      <AssetsHeader
+        projectId={projectId}
+        totalAssets={totalAssets}
+        confirmedAssets={confirmedAssets}
+        generatedAssets={generatedAssets}
+        eligibleForBulk={eligibleForBulk}
+      />
 
       {KIND_ORDER.filter((k) => grouped.has(k)).map((kind) => (
         <section key={kind} className="space-y-3">

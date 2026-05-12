@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { createProject } from "./actions";
+import { PRESET_PROFILES } from "@/lib/prompts/preset-profiles";
+import type { StylePreset } from "@/lib/prompts/loader";
 
 const ASPECT_RATIOS = [
   { value: "16:9", label: "16:9 — YouTube / theatrical" },
@@ -17,17 +19,25 @@ const ASPECT_RATIOS = [
   { value: "4:5", label: "4:5 — Portrait feed" },
 ] as const;
 
-const STYLE_PRESETS = [
+const STYLE_PRESETS: { value: StylePreset; label: string }[] = [
   { value: "cinematic_blockbuster", label: "Cinematic blockbuster (live action)" },
   { value: "animated_film", label: "Animated film (Pixar / anime / Spider-Verse)" },
   { value: "videogame_gameplay", label: "Video game gameplay (in-engine)" },
   { value: "prerendered_cutscene", label: "Pre-rendered cutscene (game cinematic)" },
-] as const;
+];
 
 export function IntakeForm() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [scriptText, setScriptText] = useState("");
+  const [stylePreset, setStylePreset] = useState<StylePreset>("cinematic_blockbuster");
+  const presetProfile = PRESET_PROFILES[stylePreset];
+  const [subMode, setSubMode] = useState<string>(presetProfile.defaultSubMode ?? "");
+
+  function handlePresetChange(next: StylePreset) {
+    setStylePreset(next);
+    setSubMode(PRESET_PROFILES[next].defaultSubMode ?? "");
+  }
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -91,7 +101,12 @@ export function IntakeForm() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="stylePreset">Style preset</Label>
-          <Select id="stylePreset" name="stylePreset" defaultValue="cinematic_blockbuster">
+          <Select
+            id="stylePreset"
+            name="stylePreset"
+            value={stylePreset}
+            onChange={(e) => handlePresetChange(e.target.value as StylePreset)}
+          >
             {STYLE_PRESETS.map((s) => (
               <option key={s.value} value={s.value}>
                 {s.label}
@@ -100,6 +115,34 @@ export function IntakeForm() {
           </Select>
         </div>
       </div>
+
+      {presetProfile.subModes.length > 0 && (
+        <div className="space-y-2 rounded border border-amber-500/30 bg-amber-500/5 p-3">
+          <Label htmlFor="subMode">
+            {stylePreset === "videogame_gameplay" ? "Camera perspective" : "Animation sub-style"}
+          </Label>
+          <p className="text-xs text-[var(--muted)]">
+            {stylePreset === "videogame_gameplay"
+              ? "How the gameplay camera frames the action. Drives every scene's camera language."
+              : "Which animation tradition the trailer should evoke. Drives rendering and motion language."}
+          </p>
+          <Select
+            id="subMode"
+            name="subMode"
+            value={subMode}
+            onChange={(e) => setSubMode(e.target.value)}
+          >
+            {presetProfile.subModes.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </Select>
+          <p className="text-[11px] italic text-[var(--muted)]">
+            {presetProfile.subModes.find((m) => m.value === subMode)?.cameraNotes}
+          </p>
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label htmlFor="mustInclude">Must include</Label>

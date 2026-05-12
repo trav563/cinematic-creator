@@ -209,7 +209,7 @@ export async function regenerateSceneMotionPrompt(
 
   const { data: project } = await supabase
     .from("projects")
-    .select("scope, genre, emotional_arc, style_preset, brief_yaml")
+    .select("scope, genre, emotional_arc, style_preset, style_preset_options, brief_yaml")
     .eq("id", scene.project_id)
     .single();
   if (!project) return { ok: false, error: "Project not found" };
@@ -231,6 +231,7 @@ export async function regenerateSceneMotionPrompt(
   try {
     const apiKey = await getProviderKey(userData.user.id, "anthropic");
     const { generateMotionPrompts } = await import("@/lib/providers/claude");
+    const presetOptions = (project.style_preset_options ?? {}) as { subMode?: string };
     const result = await generateMotionPrompts({
       apiKey,
       stylePreset: (project.style_preset ?? "cinematic_blockbuster") as
@@ -238,6 +239,7 @@ export async function regenerateSceneMotionPrompt(
         | "animated_film"
         | "videogame_gameplay"
         | "prerendered_cutscene",
+      subMode: presetOptions.subMode ?? null,
       scopeName: project.scope,
       genre: project.genre,
       emotionalArc: project.emotional_arc,

@@ -49,7 +49,7 @@ export const generateKeyframeFunction = inngest.createFunction(
 
       const { data: project } = await supabase
         .from("projects")
-        .select("scope, style_preset, aspect_ratio")
+        .select("scope, style_preset, style_preset_options, aspect_ratio")
         .eq("id", data.projectId)
         .single();
       if (!project) throw new Error("Project not found");
@@ -115,8 +115,9 @@ export const generateKeyframeFunction = inngest.createFunction(
       getProviderKey(data.userId, "google_ai_studio"),
     );
 
-    const prompt = await step.run("build-prompt", () =>
-      buildKeyframePrompt({
+    const prompt = await step.run("build-prompt", () => {
+      const presetOptions = (ctx.project.style_preset_options ?? {}) as { subMode?: string };
+      return buildKeyframePrompt({
         scopeName: ctx.project.scope,
         sceneDescription: ctx.scene.description,
         camera: ctx.scene.camera,
@@ -126,10 +127,11 @@ export const generateKeyframeFunction = inngest.createFunction(
         anchorDirection: ctx.scene.anchor_direction,
         aspectRatio: (ctx.project.aspect_ratio ?? "16:9") as AspectRatio,
         stylePreset: (ctx.project.style_preset ?? "cinematic_blockbuster") as StylePreset,
+        subMode: presetOptions.subMode ?? null,
         referencedAssets: referencedAssets.map((a) => ({ name: a.name, role: a.role })),
         editInstruction: data.editInstruction,
-      }),
-    );
+      });
+    });
 
     const result = await step.run("generate", async () => {
       const img = await generateImage({ apiKey, prompt, referenceImages: refImages });

@@ -36,7 +36,7 @@ export const generateMotionPromptsFunction = inngest.createFunction(
     const ctx = await step.run("load-context", async () => {
       const { data: project } = await supabase
         .from("projects")
-        .select("scope, genre, emotional_arc, style_preset, brief_yaml")
+        .select("scope, genre, emotional_arc, style_preset, style_preset_options, brief_yaml")
         .eq("id", data.projectId)
         .single();
       if (!project) throw new Error("Project not found");
@@ -61,10 +61,12 @@ export const generateMotionPromptsFunction = inngest.createFunction(
       getProviderKey(data.userId, "anthropic"),
     );
 
-    const prompts = await step.run("call-claude", () =>
-      generateMotionPrompts({
+    const prompts = await step.run("call-claude", () => {
+      const presetOptions = (ctx.project.style_preset_options ?? {}) as { subMode?: string };
+      return generateMotionPrompts({
         apiKey,
         stylePreset: (ctx.project.style_preset ?? "cinematic_blockbuster") as StylePreset,
+        subMode: presetOptions.subMode ?? null,
         scopeName: ctx.project.scope,
         genre: ctx.project.genre,
         emotionalArc: ctx.project.emotional_arc,
@@ -79,8 +81,8 @@ export const generateMotionPromptsFunction = inngest.createFunction(
           anchor_direction: s.anchor_direction,
           description: s.description,
         })),
-      }),
-    );
+      });
+    });
 
     await step.run("persist", async () => {
       const byNumber = new Map(prompts.prompts.map((p) => [p.scene_number, p.motion_prompt]));

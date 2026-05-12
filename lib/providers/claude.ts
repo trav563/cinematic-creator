@@ -2,6 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { loadMasterWorkflow, loadStylePreset, type StylePreset } from "@/lib/prompts/loader";
+import {
+  buildPresetCameraDirective,
+  buildPresetMotionDirective,
+} from "@/lib/prompts/preset-profiles";
 
 export const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:5"] as const;
 export type AspectRatio = (typeof ASPECT_RATIOS)[number];
@@ -69,6 +73,8 @@ interface ParseScriptArgs {
   title: string;
   aspectRatio: AspectRatio;
   stylePreset: StylePreset;
+  /** Preset sub-mode (e.g. "third_person" for gameplay, "spider_verse" for animated). */
+  subMode: string | null;
   mustInclude: string[];
   mustNotInclude: string[];
 }
@@ -79,15 +85,26 @@ export async function parseScript({
   title,
   aspectRatio,
   stylePreset,
+  subMode,
   mustInclude,
   mustNotInclude,
 }: ParseScriptArgs): Promise<ParsedScript> {
   const masterWorkflow = await loadMasterWorkflow();
   const presetContent = await loadStylePreset(stylePreset);
+  const presetDirective = buildPresetCameraDirective(stylePreset, subMode);
 
   const client = new Anthropic({ apiKey });
 
-  const system = `You are the planning brain for a cinematic AI trailer pipeline. The user has uploaded a finished script. Extract a deterministic, structured brief — derived facts about the story, the cast of characters, and a rough scene outline — that downstream steps will flesh out.
+  // The preset directive goes FIRST in the system prompt — before the role definition —
+  // so it overrides any default cinematic-film bias the model has. The preset .md content
+  // is appended at the bottom as reinforcement.
+  const system = `${presetDirective}
+
+---
+
+You are the planning brain for a trailer pipeline. The user has uploaded a finished script. Extract a deterministic, structured brief — derived facts about the story, the cast of characters, and a rough scene outline — that downstream steps will flesh out.
+
+The project's rendering identity (above) is the source of truth for camera vocabulary. When extracting the rough scene outline, the action descriptions should imply framing consistent with that identity — do NOT describe scenes in cinematic-film language if the project is gameplay or animation.
 
 You are operating under the rules of the trailer-builder workflow. Apply them — especially the anti-override guardrail (do NOT over-describe character appearances; trust references will be added later) and the frame strategy concepts (though full frame-role tagging happens in a later step).
 
@@ -95,7 +112,7 @@ You are operating under the rules of the trailer-builder workflow. Apply them �
 
 ${masterWorkflow}
 
-# Active style preset
+# Active style preset (additional context)
 
 ${presetContent}
 
@@ -194,6 +211,8 @@ interface ProposeStoryboardArgs {
   emotionalArc: string | null;
   aspectRatio: AspectRatio;
   stylePreset: StylePreset;
+  /** Preset sub-mode (e.g. "third_person" for gameplay). */
+  subMode: string | null;
   mustInclude: string[];
   mustNotInclude: string[];
   characters: Array<{ name: string; role: string | null; base_description: string | null }>;
@@ -204,12 +223,19 @@ interface ProposeStoryboardArgs {
 export async function proposeStoryboard(args: ProposeStoryboardArgs): Promise<Storyboard> {
   const masterWorkflow = await loadMasterWorkflow();
   const presetContent = await loadStylePreset(args.stylePreset);
+  const presetDirective = buildPresetCameraDirective(args.stylePreset, args.subMode);
   const client = new Anthropic({ apiKey: args.apiKey });
 
-  const system = `You are the storyboard designer for a cinematic AI trailer. The brief and rough scene outline already exist; your job is to expand the outline into a dense, production-ready storyboard table per master_workflow.md Step 1.
+  const system = `${presetDirective}
 
-You are operating under the rules of the trailer-builder workflow. Critical rules to apply:
-- **Camera variety**: no two consecutive scenes share the same camera angle type. Mix extreme close-ups, wides, low angles, tracking, Dutch angles, POV/over-shoulder, profile, insert shots, two-shots.
+---
+
+You are the storyboard designer for this trailer. The brief and rough scene outline already exist; your job is to expand the outline into a dense, production-ready storyboard table per master_workflow.md Step 1.
+
+The project's rendering identity (above) is non-negotiable. EVERY camera value you produce must come from the ALLOWED camera vocabulary list above. NONE may come from the FORBIDDEN list. If a scene's natural framing conflicts with the project's identity (e.g. a Dutch angle in a gameplay project), substitute it with the closest allowed equivalent.
+
+Other critical rules:
+- **Camera variety within the allowed vocabulary**: no two consecutive scenes share the same camera angle type — but variety draws from the project's allowed list, not generic film vocabulary.
 - **Frame role distribution**: typically 30–50% pair scenes in action-heavy trailers, less in slower ones. Use SINGLE for ambient camera moves, simple atmospheric motion, contained single actions. Use PAIR-START when the change is additive (explosions, sparks, atmosphere). Use PAIR-END when the end frame is the money shot or the change is subtractive of a complex element.
 - **Trailer structure**: hook within first 3 seconds (1.5s for vertical), follow the locked emotional arc, identify the existential twist / threat / climax / title moment.
 - **Scope fidelity**: use must-include items, exclude must-not-include items.
@@ -220,7 +246,7 @@ You are operating under the rules of the trailer-builder workflow. Critical rule
 
 ${masterWorkflow}
 
-# Active style preset
+# Active style preset (additional context — reinforces but does not override the rendering identity above)
 
 ${presetContent}
 
@@ -298,6 +324,8 @@ export type MotionPrompts = z.infer<typeof MotionPromptsSchema>;
 interface GenerateMotionPromptsArgs {
   apiKey: string;
   stylePreset: StylePreset;
+  /** Preset sub-mode (e.g. "third_person" for gameplay). */
+  subMode: string | null;
   scopeName: string | null;
   genre: string | null;
   emotionalArc: string | null;
@@ -316,22 +344,34 @@ interface GenerateMotionPromptsArgs {
 
 export async function generateMotionPrompts(args: GenerateMotionPromptsArgs): Promise<MotionPrompts> {
   const presetContent = await loadStylePreset(args.stylePreset);
+  const presetCameraDirective = buildPresetCameraDirective(args.stylePreset, args.subMode);
+  const presetMotionDirective = buildPresetMotionDirective(args.stylePreset, args.subMode);
   const client = new Anthropic({ apiKey: args.apiKey });
 
-  // Embed Kling's documented best practices and camera vocabulary so the model produces
-  // prompts that the Kling video model actually responds to. Sources: Kling docs at
-  // kling-docs/apiReference_2Fmodel_2FimageToVideo.md (camera_control type/config) and
-  // common community knowledge on what produces clean Kling motion.
-  const system = `You are a motion-prompt author for Kling — a state-of-the-art image-to-video model. The user has finished storyboarding still keyframes; your job is to write the **motion prompt** Kling uses to animate each keyframe into a 5-10 second clip.
+  // The preset camera + motion directives go FIRST — before generic Kling guidance —
+  // so the project's identity overrides the model's default cinematic-film bias.
+  const system = `${presetCameraDirective}
+
+---
+
+${presetMotionDirective}
+
+---
+
+You are a motion-prompt author for Kling — a state-of-the-art image-to-video model. The user has finished storyboarding still keyframes; your job is to write the **motion prompt** Kling uses to animate each keyframe into a 5-10 second clip.
+
+The project's motion vocabulary above is non-negotiable. Every prompt's leading camera-move verb must come from the ALLOWED motion vocabulary list. NONE may come from the FORBIDDEN list. If your instinct is to write "anamorphic crane" but this is a gameplay project, write "behind-shoulder follow accelerates" instead.
 
 # Kling prompting principles (non-negotiable)
 
-1. **Lead with camera movement.** Kling responds best to motion verbs at the very start of the prompt. Pick from this vocabulary:
-   - **Translation**: dolly in, dolly out, push in, pull out, truck left, truck right, crane up, crane down
-   - **Rotation**: pan left, pan right, tilt up, tilt down, roll, orbit clockwise, orbit counter-clockwise
-   - **Compound**: arc shot, whip pan, drone reveal, low-to-high crane, parallax dolly, rack focus
-   - **Lens**: zoom in, zoom out, focus pull, anamorphic flare
-   - **Stillness**: locked-off, handheld micro-tremor, subtle drift
+1. **Lead with camera movement.** Kling responds best to motion verbs at the very start of the prompt. Use the project's ALLOWED motion vocabulary above — those are the verbs that match the project's identity. Generic film verbs are listed below as backup syntax reference but if the project forbids them, do NOT use them:
+   - **Translation (cinematic)**: dolly in, dolly out, push in, pull out, truck left, truck right, crane up, crane down
+   - **Rotation (cinematic)**: pan left, pan right, tilt up, tilt down, roll, orbit clockwise, orbit counter-clockwise
+   - **Compound (cinematic)**: arc shot, whip pan, drone reveal, low-to-high crane, parallax dolly, rack focus
+   - **Lens (cinematic)**: zoom in, zoom out, focus pull, anamorphic flare
+   - **Gameplay**: lock-on snap, behind-shoulder follow, first-person bob, controller-look pan, controlled camera shake, gameplay zoom-in
+   - **Animation**: snap zoom, exaggerated push-in, pose-to-pose snap, smear-frame motion
+   - **Stillness (universal)**: locked-off, handheld micro-tremor, subtle drift
 2. **Subject motion comes second, with sub-beats.** Don't just name one action — sequence it across the 5-10s clip. "Draws sword" is weak. "Hand trembles, then steadies, closes around the hilt — blade rings free, catches the light" is what makes Kling render a confident motion arc instead of a stiff one-note loop. Use commas and dashes to chain 2-4 beats inside the clip's runtime. Concrete verbs only ("hand grazes", "blade rings", "embers swirl", "cape billows", "eyes narrow") — never vague ones ("moves", "happens", "exists").
 3. **Atmosphere is mandatory, not optional.** Every prompt must include at least one sensory atmospheric detail Kling can render: volumetric haze, dust motes, embers, rain streaks, lens flare, sun shafts, particles in the air, motion blur, depth-of-field shift, light catching X. These are the textures that elevate a Kling clip from "moves correctly" to "feels cinematic." Skipping atmosphere is the single biggest reason Kling output looks flat.
 4. **Concise syntax, rich content.** Target 200-400 characters across 2-4 short sentences. The Kling docs say "the simpler the syntax structure, the better" — that's about syntax (short clauses, plain English, no markdown), NOT about being information-poor. A long sparse prompt fails; a tight detailed one wins. Do NOT pad with adjectives, but DO include the sensory beats Kling needs to render.
@@ -342,7 +382,7 @@ export async function generateMotionPrompts(args: GenerateMotionPromptsArgs): Pr
    - **SINGLE**: full motion arc within the clip — beginning, middle, end of the moment
    - **PAIR-START**: setup motion only — anticipation, build, the calm before. End the prompt with where the energy is heading but don't deliver it. The PAIR-END frame will pay it off.
    - **PAIR-END**: climactic delivery — the explosion, the impact, the reveal happens. The clip should land the moment.
-9. **Match the project's style preset** — the preset below tells you the rendering aesthetic. Cinematic blockbuster wants ARRI-style anamorphic moves; videogame_gameplay wants in-engine camera; animated_film wants expressive over-cranked motion.
+9. **Project identity is non-negotiable** — the rendering identity and motion vocabulary at the TOP of this prompt are the source of truth. Cinematic blockbuster wants ARRI-style anamorphic moves; videogame_gameplay wants in-engine camera (behind-shoulder follow / first-person bob / lock-on snap); animated_film wants expressive over-cranked motion. If the project is gameplay or animated, NEVER use cinematic film verbs in the motion prompt.
 10. **Story coherence (non-negotiable)** — every motion prompt must serve the trailer's emotional arc and the scene's role in the larger structure. Random or generic animation breaks the trailer.
    - Read the locked brief, the emotional arc, and the recurring motif before writing any prompts. Identify the trailer's hook, escalation, climax, and resolution. Each scene's motion must reinforce its position in that arc.
    - **Pacing**: act 1 / opening = slower, contemplative motion (gentle drifts, slow push-ins, atmospheric stillness). Act 2 = building energy (faster cuts of motion, more aggressive camera moves). Climax = peak intensity (whip pans, hard impacts, rapid motion). Title / resolution = controlled stillness or final exhale.

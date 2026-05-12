@@ -19,6 +19,7 @@ interface Project {
   must_not_include: string[] | null;
   aspect_ratio: string;
   style_preset: string | null;
+  style_preset_options: { subMode?: string } | null;
   brief_yaml: string | null;
 }
 
@@ -119,6 +120,14 @@ export function BriefReview({
         <p className="text-xs text-[var(--muted)]">
           Aspect ratio: <span className="text-foreground">{project.aspect_ratio}</span> · Style preset:{" "}
           <span className="text-foreground">{project.style_preset}</span>
+          {project.style_preset_options?.subMode && (
+            <>
+              {" "}·{" "}
+              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-400">
+                Sub-mode: {project.style_preset_options.subMode.replace(/_/g, " ")}
+              </span>
+            </>
+          )}
         </p>
       </section>
 

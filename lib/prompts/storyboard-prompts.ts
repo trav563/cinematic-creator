@@ -1,5 +1,6 @@
 import type { StylePreset } from "./loader";
 import type { AspectRatio } from "@/lib/providers/claude";
+import { PRESET_PROFILES, getSubModeCameraNotes } from "./preset-profiles";
 
 // Each preset is a single rendering description that ALWAYS applies — references dictate
 // character identity (costume, palette, proportions, gear, hairstyle) but the project's
@@ -41,6 +42,8 @@ interface KeyframePromptArgs {
   anchorDirection: string | null;
   aspectRatio: AspectRatio;
   stylePreset: StylePreset;
+  /** Preset sub-mode (e.g. "third_person" for gameplay). Drives camera notes. */
+  subMode: string | null;
   referencedAssets: Array<{ name: string; role: string | null }>;
   editInstruction?: string;
 }
@@ -59,6 +62,8 @@ export function buildKeyframePrompt(args: KeyframePromptArgs): string {
   const renderLine = STYLE_RENDER_LINES[args.stylePreset];
   const aspectLine = ASPECT_GUIDANCE[args.aspectRatio];
   const frameRoleLine = FRAME_ROLE_GUIDANCE[args.frameRole];
+  const presetProfile = PRESET_PROFILES[args.stylePreset];
+  const subModeNotes = getSubModeCameraNotes(args.stylePreset, args.subMode);
   const hasRefs = args.referencedAssets.length > 0;
 
   const refsLine = hasRefs
@@ -75,17 +80,16 @@ IDENTITY FIDELITY (highest priority — non-negotiable):
     ? `\n\nApply this specific change: ${args.editInstruction}`
     : "";
 
-  return `Cinematic trailer keyframe — single frame for ${args.scopeName ?? "the project"}.
+  return `Trailer keyframe — single frame for ${args.scopeName ?? "the project"}.
 
 # Scene
 ${args.act ? `Act: ${args.act}\n` : ""}${args.beat ? `Beat: ${args.beat}\n` : ""}Action: ${args.sceneDescription}
 
 # Cinematography
-- Camera: ${args.camera ?? "appropriate to the action"}
+- Camera: ${args.camera ?? "appropriate to the action"}${subModeNotes ? `\n- Sub-mode framing: ${subModeNotes}` : ""}
 - Aspect-ratio composition: ${aspectLine}
 - Frame role: ${frameRoleLine}${args.anchorDirection ? `\n- Anchor rationale: ${args.anchorDirection}` : ""}
-- Lighting: practical, scene-appropriate (sun / fire / neon / monitor glow / etc.) — NOT studio neutral
-- Atmosphere: dust motes, volumetric haze, smoke, weather as scene calls for it
+- Atmosphere & lighting (preset-specific): ${presetProfile.atmosphereLine}
 - Mood: tonal — match the act's emotional register
 
 # References
@@ -95,8 +99,9 @@ ${refsLine}
 ${renderLine}
 
 # Critical
-- This is a cinematic frame, not a model sheet. Compose for impact: scale, depth, intentional negative space.
+- Compose for impact: scale, depth, intentional negative space.
 - DO NOT describe the character's face, body, costume, or gear — the reference images carry that. Adding descriptions here will produce a muddy hybrid.
-- DO NOT include text overlays, title cards, subtitles, captions, or watermarks unless explicitly requested.${editClause}`;
+- DO NOT include text overlays, title cards, subtitles, captions, or watermarks unless explicitly requested.
+- The Camera and Sub-mode framing above must be honored EXACTLY — do not substitute with a generic film angle.${editClause}`;
 }
 

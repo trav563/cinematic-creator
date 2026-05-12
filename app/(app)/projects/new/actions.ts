@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import { inngest } from "@/lib/inngest/client";
 import { ASPECT_RATIOS, STYLE_PRESETS } from "@/lib/providers/claude";
+import { PRESET_PROFILES } from "@/lib/prompts/preset-profiles";
 import type { ParseScriptEventData } from "@/lib/inngest/functions/parse-script";
 
 const FormSchema = z.object({
@@ -12,6 +13,9 @@ const FormSchema = z.object({
   scriptText: z.string().min(20, "Script must be at least 20 characters"),
   aspectRatio: z.enum(ASPECT_RATIOS),
   stylePreset: z.enum(STYLE_PRESETS),
+  // Optional sub-mode for presets that have sub-modes (gameplay/animated). Validated
+  // against the preset's allowed list further down.
+  subMode: z.string().optional(),
   mustInclude: z.array(z.string()).default([]),
   mustNotInclude: z.array(z.string()).default([]),
 });
@@ -19,11 +23,13 @@ const FormSchema = z.object({
 type Result = { ok: true; projectId: string } | { ok: false; error: string };
 
 export async function createProject(formData: FormData): Promise<Result> {
+  const rawSubMode = formData.get("subMode");
   const raw = {
     title: String(formData.get("title") ?? ""),
     scriptText: String(formData.get("scriptText") ?? ""),
     aspectRatio: String(formData.get("aspectRatio") ?? ""),
     stylePreset: String(formData.get("stylePreset") ?? ""),
+    subMode: rawSubMode ? String(rawSubMode) : undefined,
     mustInclude: parseList(formData.get("mustInclude")),
     mustNotInclude: parseList(formData.get("mustNotInclude")),
   };
@@ -31,6 +37,22 @@ export async function createProject(formData: FormData): Promise<Result> {
   const parsed = FormSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  // Resolve the sub-mode against the preset's profile. If the preset has sub-modes and
+  // the user didn't pick one, use the default. If the user picked something invalid,
+  // reject. If the preset has no sub-modes, ignore whatever was sent.
+  const profile = PRESET_PROFILES[parsed.data.stylePreset];
+  let resolvedSubMode: string | null = null;
+  if (profile.subModes.length > 0) {
+    const candidate = parsed.data.subMode || profile.defaultSubMode;
+    if (!candidate) {
+      return { ok: false, error: `Pick a sub-mode for ${parsed.data.stylePreset}.` };
+    }
+    if (!profile.subModes.some((m) => m.value === candidate)) {
+      return { ok: false, error: `Invalid sub-mode "${candidate}" for ${parsed.data.stylePreset}.` };
+    }
+    resolvedSubMode = candidate;
   }
 
   const supabase = await createSupabaseServerClient();
@@ -57,6 +79,7 @@ export async function createProject(formData: FormData): Promise<Result> {
       status: "intake",
       aspect_ratio: parsed.data.aspectRatio,
       style_preset: parsed.data.stylePreset,
+      style_preset_options: resolvedSubMode ? { subMode: resolvedSubMode } : {},
       must_include: parsed.data.mustInclude,
       must_not_include: parsed.data.mustNotInclude,
     })
@@ -96,6 +119,7 @@ export async function createProject(formData: FormData): Promise<Result> {
     title: parsed.data.title,
     aspectRatio: parsed.data.aspectRatio,
     stylePreset: parsed.data.stylePreset,
+    subMode: resolvedSubMode,
     mustInclude: parsed.data.mustInclude,
     mustNotInclude: parsed.data.mustNotInclude,
   };

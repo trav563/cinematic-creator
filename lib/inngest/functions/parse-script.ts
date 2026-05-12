@@ -16,6 +16,8 @@ export interface ParseScriptEventData {
   title: string;
   aspectRatio: AspectRatio;
   stylePreset: StylePreset;
+  /** Preset sub-mode (e.g. "third_person" for gameplay). Null when preset has no sub-modes. */
+  subMode: string | null;
   mustInclude: string[];
   mustNotInclude: string[];
 }
@@ -46,6 +48,7 @@ export const parseScriptFunction = inngest.createFunction(
         title: data.title,
         aspectRatio: data.aspectRatio,
         stylePreset: data.stylePreset,
+        subMode: data.subMode,
         mustInclude: data.mustInclude,
         mustNotInclude: data.mustNotInclude,
       });

@@ -36,7 +36,9 @@ export const proposeStoryboardFunction = inngest.createFunction(
     const ctx = await step.run("load-context", async () => {
       const { data: project } = await supabase
         .from("projects")
-        .select("brief_yaml, scope, genre, emotional_arc, aspect_ratio, style_preset, must_include, must_not_include")
+        .select(
+          "brief_yaml, scope, genre, emotional_arc, aspect_ratio, style_preset, style_preset_options, must_include, must_not_include",
+        )
         .eq("id", data.projectId)
         .single();
       if (!project) throw new Error("Project not found");
@@ -61,6 +63,7 @@ export const proposeStoryboardFunction = inngest.createFunction(
     );
 
     const storyboard = await step.run("call-claude", async () => {
+      const presetOptions = (ctx.project.style_preset_options ?? {}) as { subMode?: string };
       return proposeStoryboard({
         apiKey,
         briefYaml: ctx.project.brief_yaml,
@@ -69,6 +72,7 @@ export const proposeStoryboardFunction = inngest.createFunction(
         emotionalArc: ctx.project.emotional_arc,
         aspectRatio: ctx.project.aspect_ratio as AspectRatio,
         stylePreset: (ctx.project.style_preset ?? "cinematic_blockbuster") as StylePreset,
+        subMode: presetOptions.subMode ?? null,
         mustInclude: (ctx.project.must_include ?? []) as string[],
         mustNotInclude: (ctx.project.must_not_include ?? []) as string[],
         characters: ctx.characters,

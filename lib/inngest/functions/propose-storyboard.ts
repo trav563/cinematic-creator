@@ -43,9 +43,9 @@ export const proposeStoryboardFunction = inngest.createFunction(
         .single();
       if (!project) throw new Error("Project not found");
 
-      const { data: characters } = await supabase
-        .from("characters")
-        .select("name, role, base_description")
+      const { data: assets } = await supabase
+        .from("assets")
+        .select("name, kind, role, base_description")
         .eq("project_id", data.projectId)
         .order("created_at");
 
@@ -55,7 +55,7 @@ export const proposeStoryboardFunction = inngest.createFunction(
         .eq("project_id", data.projectId)
         .order("scene_number");
 
-      return { project, characters: characters ?? [], scenes: scenes ?? [] };
+      return { project, assets: assets ?? [], scenes: scenes ?? [] };
     });
 
     const apiKey = await step.run("fetch-key", () =>
@@ -75,7 +75,12 @@ export const proposeStoryboardFunction = inngest.createFunction(
         subMode: presetOptions.subMode ?? null,
         mustInclude: (ctx.project.must_include ?? []) as string[],
         mustNotInclude: (ctx.project.must_not_include ?? []) as string[],
-        characters: ctx.characters,
+        assets: ctx.assets.map((a) => ({
+          name: a.name,
+          kind: (a.kind ?? "character") as "character" | "location" | "object",
+          role: a.role,
+          base_description: a.base_description,
+        })),
         existingScenes: ctx.scenes,
       });
     });
@@ -91,6 +96,7 @@ export const proposeStoryboardFunction = inngest.createFunction(
           beat: s.beat,
           camera: s.camera,
           frame_role: s.frame_role,
+          pair_anchor: s.pair_anchor,
           anchor_direction: s.anchor_direction,
           description: s.description,
           status: "planned",

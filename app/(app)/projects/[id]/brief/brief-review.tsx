@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { updateBrief, updateCharacter, deleteCharacter, lockBrief } from "./actions";
+import { updateBrief, updateAsset, deleteAsset, lockBrief } from "./actions";
 
 interface Project {
   id: string;
@@ -23,7 +23,7 @@ interface Project {
   brief_yaml: string | null;
 }
 
-interface Character {
+interface Asset {
   id: string;
   name: string;
   role: string | null;
@@ -38,11 +38,11 @@ interface Scene {
 
 export function BriefReview({
   project,
-  characters,
+  assets,
   scenes,
 }: {
   project: Project;
-  characters: Character[];
+  assets: Asset[];
   scenes: Scene[];
 }) {
   const router = useRouter();
@@ -81,7 +81,7 @@ export function BriefReview({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{project.title}</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Review the derived brief and character list. Edit anything that&apos;s wrong, then lock it
+          Review the derived brief and asset list. Edit anything that&apos;s wrong, then lock it
           to open the workspace.
         </p>
       </div>
@@ -133,15 +133,15 @@ export function BriefReview({
 
       <section className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-medium">Characters ({characters.length})</h2>
+          <h2 className="text-base font-medium">Assets ({assets.length})</h2>
         </div>
         <div className="space-y-3">
-          {characters.map((c) => (
-            <CharacterRow key={c.id} character={c} />
+          {assets.map((c) => (
+            <AssetRow key={c.id} asset={c} />
           ))}
-          {characters.length === 0 && (
+          {assets.length === 0 && (
             <p className="text-sm text-[var(--muted)]">
-              No characters extracted. You can add them after locking the brief.
+              No assets extracted. You can add them after locking the brief.
             </p>
           )}
         </div>
@@ -176,16 +176,16 @@ export function BriefReview({
   );
 }
 
-function CharacterRow({ character }: { character: Character }) {
-  const [name, setName] = useState(character.name);
-  const [role, setRole] = useState(character.role ?? "");
-  const [desc, setDesc] = useState(character.base_description ?? "");
+function AssetRow({ asset }: { asset: Asset }) {
+  const [name, setName] = useState(asset.name);
+  const [role, setRole] = useState(asset.role ?? "");
+  const [desc, setDesc] = useState(asset.base_description ?? "");
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
   function handleSave() {
     startTransition(async () => {
-      const result = await updateCharacter(character.id, { name, role, base_description: desc });
+      const result = await updateAsset(asset.id, { name, role, base_description: desc });
       if (!result.ok) toast.error(result.error);
       else toast.success("Saved");
     });
@@ -193,7 +193,7 @@ function CharacterRow({ character }: { character: Character }) {
 
   function handleDelete() {
     startTransition(async () => {
-      const result = await deleteCharacter(character.id);
+      const result = await deleteAsset(asset.id);
       if (!result.ok) {
         toast.error(result.error);
         return;

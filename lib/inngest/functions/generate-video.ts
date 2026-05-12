@@ -60,18 +60,49 @@ export const generateVideoFunction = inngest.createFunction(
     const ctx = await step.run("load-context", async () => {
       const { data: scene } = await supabase
         .from("scenes")
-        .select("scene_number, current_keyframe_id, project_id, description")
+        .select(
+          "scene_number, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id, frame_role, project_id, description",
+        )
         .eq("id", data.sceneId)
         .single();
       if (!scene) throw new Error("Scene not found");
-      if (!scene.current_keyframe_id) throw new Error("Scene has no current keyframe");
 
-      const { data: kf } = await supabase
-        .from("scene_keyframes")
-        .select("image_url")
-        .eq("id", scene.current_keyframe_id)
-        .single();
-      if (!kf) throw new Error("Keyframe not found in storage");
+      // For PAIR scenes we need both start and end keyframes. For SINGLE we use
+      // current_keyframe_id. (Legacy PAIR-START / PAIR-END scenes from old projects
+      // fall through to the SINGLE path since they only have one keyframe per row.)
+      const isPair =
+        scene.frame_role === "PAIR" &&
+        scene.current_start_keyframe_id &&
+        scene.current_end_keyframe_id;
+
+      let startKfPath: string | null = null;
+      let endKfPath: string | null = null;
+
+      if (isPair) {
+        const { data: kfs } = await supabase
+          .from("scene_keyframes")
+          .select("id, image_url")
+          .in("id", [scene.current_start_keyframe_id, scene.current_end_keyframe_id]);
+        const byId = new Map((kfs ?? []).map((k) => [k.id, k.image_url]));
+        startKfPath = byId.get(scene.current_start_keyframe_id) ?? null;
+        endKfPath = byId.get(scene.current_end_keyframe_id) ?? null;
+        if (!startKfPath || !endKfPath) {
+          throw new Error("PAIR scene is missing one or both keyframes in storage");
+        }
+      } else {
+        if (!scene.current_keyframe_id) {
+          throw new Error(
+            "Scene has no keyframe yet. Generate the anchor (or single) keyframe first.",
+          );
+        }
+        const { data: kf } = await supabase
+          .from("scene_keyframes")
+          .select("image_url")
+          .eq("id", scene.current_keyframe_id)
+          .single();
+        if (!kf) throw new Error("Keyframe not found in storage");
+        startKfPath = kf.image_url;
+      }
 
       const { data: project } = await supabase
         .from("projects")
@@ -80,10 +111,11 @@ export const generateVideoFunction = inngest.createFunction(
         .single();
       if (!project) throw new Error("Project not found");
 
-      // Load any characters in this project that have a Kling element bound, so we can
-      // attach element_list for those mentioned in the scene description.
-      const { data: boundCharacters } = await supabase
-        .from("characters")
+      // Load any assets (characters, locations, objects) in this project that have a
+      // Kling element bound, so we can attach element_list for those mentioned in the
+      // scene description.
+      const { data: boundAssets } = await supabase
+        .from("assets")
         .select("name, kling_element_id")
         .eq("project_id", data.projectId)
         .not("kling_element_id", "is", null);
@@ -91,28 +123,30 @@ export const generateVideoFunction = inngest.createFunction(
       return {
         sceneNumber: scene.scene_number,
         sceneDescription: scene.description,
-        keyframePath: kf.image_url,
+        isPair,
+        startKfPath,
+        endKfPath, // null for SINGLE
         aspectRatio: project.aspect_ratio,
-        boundCharacters: boundCharacters ?? [],
+        boundAssets: boundAssets ?? [],
       };
     });
 
-    // Match bound characters against the scene description by full snake_case name.
+    // Match bound assets against the scene description by full snake_case name.
     // Same matcher as generate-keyframe — underscores treated as separators.
     const desc = ctx.sceneDescription.toLowerCase();
     const matchedElementIds: string[] = [];
-    for (const c of ctx.boundCharacters) {
-      if (!c.kling_element_id) continue;
-      const fullName = c.name.toLowerCase();
+    for (const a of ctx.boundAssets) {
+      if (!a.kling_element_id) continue;
+      const fullName = a.name.toLowerCase();
       const re = new RegExp(`(?:^|[^a-z0-9])${fullName}(?:[^a-z0-9]|$)`, "i");
       if (re.test(desc)) {
-        matchedElementIds.push(c.kling_element_id);
+        matchedElementIds.push(a.kling_element_id);
       }
       if (matchedElementIds.length >= 3) break; // Kling caps element_list at 3
     }
     if (matchedElementIds.length) {
       console.log(
-        `[generate-video] scene ${ctx.sceneNumber}: attaching ${matchedElementIds.length} Kling element(s) (${matchedElementIds.join(", ")}) for character consistency.`,
+        `[generate-video] scene ${ctx.sceneNumber}: attaching ${matchedElementIds.length} Kling element(s) (${matchedElementIds.join(", ")}) for asset consistency.`,
       );
     }
 
@@ -120,9 +154,10 @@ export const generateVideoFunction = inngest.createFunction(
       getProviderKey(data.userId, "kling"),
     );
 
-    const imageBase64 = await step.run("load-keyframe", async () => {
-      const { base64 } = await downloadAsServiceBase64(ctx.keyframePath);
-      return base64;
+    const images = await step.run("load-keyframes", async () => {
+      const start = await downloadAsServiceBase64(ctx.startKfPath!);
+      const end = ctx.endKfPath ? await downloadAsServiceBase64(ctx.endKfPath) : null;
+      return { start, end };
     });
 
     const taskId = await step.run("submit-task", () =>
@@ -131,7 +166,10 @@ export const generateVideoFunction = inngest.createFunction(
         model: data.model,
         mode: data.mode,
         duration: data.duration,
-        imageBase64,
+        imageBase64: images.start.base64,
+        // For PAIR scenes, pass the end frame as image_tail so Kling interpolates
+        // from start to end across the clip. For SINGLE scenes this is undefined.
+        imageTailBase64: images.end?.base64,
         prompt: data.prompt,
         negativePrompt: data.negativePrompt,
         sound: data.sound,

@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { CharactersTab } from "./_tabs/characters";
+import { AssetsTab } from "./_tabs/assets";
 import { StoryboardTab } from "./_tabs/storyboard";
 import { VideoTab } from "./_tabs/video";
 
-const TABS = ["characters", "storyboard", "video", "history"] as const;
+const TABS = ["assets", "storyboard", "video", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function ProjectWorkspacePage({
@@ -14,8 +14,10 @@ export default async function ProjectWorkspacePage({
 }: PageProps<"/projects/[id]">) {
   const { id } = await params;
   const search = await searchParams;
-  const tabParam = typeof search.tab === "string" ? search.tab : "characters";
-  const activeTab = (TABS as readonly string[]).includes(tabParam) ? (tabParam as Tab) : "characters";
+  const tabParam = typeof search.tab === "string" ? search.tab : "assets";
+  // Backward compat: old URLs with ?tab=characters redirect to ?tab=assets
+  const normalized = tabParam === "characters" ? "assets" : tabParam;
+  const activeTab = (TABS as readonly string[]).includes(normalized) ? (normalized as Tab) : "assets";
 
   const supabase = await createSupabaseServerClient();
   const { data: project } = await supabase.from("projects").select("*").eq("id", id).single();
@@ -57,8 +59,8 @@ export default async function ProjectWorkspacePage({
         </ul>
       </nav>
 
-      {activeTab === "characters" ? (
-        <CharactersTab projectId={id} />
+      {activeTab === "assets" ? (
+        <AssetsTab projectId={id} />
       ) : activeTab === "storyboard" ? (
         <StoryboardTab projectId={id} />
       ) : activeTab === "video" ? (

@@ -4,25 +4,25 @@ import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { inngest } from "@/lib/inngest/client";
 import { PROJECT_ASSETS_BUCKET } from "@/lib/storage";
-import type { GenerateCharacterVariationEventData } from "@/lib/inngest/functions/generate-character-variation";
-import type { BindCharacterElementEventData } from "@/lib/inngest/functions/bind-character-element";
+import type { GenerateAssetVariationEventData } from "@/lib/inngest/functions/generate-asset-variation";
+import type { BindAssetElementEventData } from "@/lib/inngest/functions/bind-asset-element";
 
 type Result<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
-export async function uploadCharacterReference(
-  characterId: string,
+export async function uploadAssetReference(
+  assetId: string,
   formData: FormData,
 ): Promise<Result<{ paths: string[] }>> {
   const supabase = await createSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return { ok: false, error: "Not signed in" };
 
-  const { data: character, error: charErr } = await supabase
-    .from("characters")
+  const { data: asset, error: assetErr } = await supabase
+    .from("assets")
     .select("id, project_id, reference_image_urls")
-    .eq("id", characterId)
+    .eq("id", assetId)
     .single();
-  if (charErr || !character) return { ok: false, error: "Character not found" };
+  if (assetErr || !asset) return { ok: false, error: "Asset not found" };
 
   const files = formData.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
   if (files.length === 0) return { ok: false, error: "No files provided" };
@@ -31,7 +31,7 @@ export async function uploadCharacterReference(
   for (const file of files) {
     const ext = file.name.split(".").pop() ?? "png";
     const filename = `${crypto.randomUUID()}.${ext}`;
-    const path = `${userData.user.id}/${character.project_id}/refs/${characterId}/${filename}`;
+    const path = `${userData.user.id}/${asset.project_id}/refs/${assetId}/${filename}`;
     const { error: upErr } = await supabase.storage
       .from(PROJECT_ASSETS_BUCKET)
       .upload(path, file, { contentType: file.type, upsert: false });
@@ -39,62 +39,61 @@ export async function uploadCharacterReference(
     uploadedPaths.push(path);
   }
 
-  const newRefs = [...(character.reference_image_urls ?? []), ...uploadedPaths];
+  const newRefs = [...(asset.reference_image_urls ?? []), ...uploadedPaths];
   const { error: updateErr } = await supabase
-    .from("characters")
+    .from("assets")
     .update({ reference_image_urls: newRefs })
-    .eq("id", characterId);
+    .eq("id", assetId);
   if (updateErr) return { ok: false, error: updateErr.message };
 
-  revalidatePath(`/projects/${character.project_id}`);
+  revalidatePath(`/projects/${asset.project_id}`);
   return { ok: true, data: { paths: uploadedPaths } };
 }
 
-export async function removeCharacterReference(
-  characterId: string,
+export async function removeAssetReference(
+  assetId: string,
   refPath: string,
 ): Promise<Result> {
   const supabase = await createSupabaseServerClient();
-  const { data: character, error: charErr } = await supabase
-    .from("characters")
+  const { data: asset, error: assetErr } = await supabase
+    .from("assets")
     .select("id, project_id, reference_image_urls")
-    .eq("id", characterId)
+    .eq("id", assetId)
     .single();
-  if (charErr || !character) return { ok: false, error: "Character not found" };
+  if (assetErr || !asset) return { ok: false, error: "Asset not found" };
 
   await supabase.storage.from(PROJECT_ASSETS_BUCKET).remove([refPath]);
 
-  const remaining = (character.reference_image_urls ?? []).filter((p: string) => p !== refPath);
+  const remaining = (asset.reference_image_urls ?? []).filter((p: string) => p !== refPath);
   const { error: updateErr } = await supabase
-    .from("characters")
+    .from("assets")
     .update({ reference_image_urls: remaining })
-    .eq("id", characterId);
+    .eq("id", assetId);
   if (updateErr) return { ok: false, error: updateErr.message };
 
-  revalidatePath(`/projects/${character.project_id}`);
+  revalidatePath(`/projects/${asset.project_id}`);
   return { ok: true };
 }
 
-export async function generateCharacterVariations(
-  characterId: string,
+export async function generateAssetVariations(
+  assetId: string,
   editInstruction?: string,
 ): Promise<Result<{ jobId: string }>> {
   const supabase = await createSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return { ok: false, error: "Not signed in" };
 
-  const { data: character } = await supabase
-    .from("characters")
+  const { data: asset } = await supabase
+    .from("assets")
     .select("id, project_id, reference_image_urls")
-    .eq("id", characterId)
+    .eq("id", assetId)
     .single();
-  if (!character) return { ok: false, error: "Character not found" };
+  if (!asset) return { ok: false, error: "Asset not found" };
 
-  if (!character.reference_image_urls || character.reference_image_urls.length === 0) {
+  if (!asset.reference_image_urls || asset.reference_image_urls.length === 0) {
     return { ok: false, error: "Upload at least one reference image first." };
   }
 
-  // Verify Google AI Studio key exists
   const { data: keyRow } = await supabase
     .from("provider_credentials")
     .select("provider")
@@ -107,58 +106,59 @@ export async function generateCharacterVariations(
   const { data: job, error: jobErr } = await supabase
     .from("jobs")
     .insert({
-      project_id: character.project_id,
+      project_id: asset.project_id,
       user_id: userData.user.id,
       type: "image_generate",
       status: "queued",
       provider: "google_ai_studio",
-      request: { characterId, editInstruction },
+      request: { assetId, editInstruction },
     })
     .select("id")
     .single();
   if (jobErr || !job) return { ok: false, error: jobErr?.message ?? "Failed to enqueue job" };
 
-  const eventData: GenerateCharacterVariationEventData = {
+  const eventData: GenerateAssetVariationEventData = {
     jobId: job.id,
-    projectId: character.project_id,
-    characterId,
+    projectId: asset.project_id,
+    assetId,
     userId: userData.user.id,
     editInstruction,
   };
-  await inngest.send({ name: "character/generate_variation", data: eventData });
+  await inngest.send({ name: "asset/generate_variation", data: eventData });
 
-  revalidatePath(`/projects/${character.project_id}`);
+  revalidatePath(`/projects/${asset.project_id}`);
   return { ok: true, data: { jobId: job.id } };
 }
 
 export async function confirmVariation(
-  characterId: string,
+  assetId: string,
   variationId: string,
 ): Promise<Result> {
   const supabase = await createSupabaseServerClient();
-  const { data: character } = await supabase
-    .from("characters")
+  const { data: asset } = await supabase
+    .from("assets")
     .select("project_id")
-    .eq("id", characterId)
+    .eq("id", assetId)
     .single();
 
   const { error } = await supabase
-    .from("characters")
+    .from("assets")
     .update({ confirmed_variation_id: variationId })
-    .eq("id", characterId);
+    .eq("id", assetId);
   if (error) return { ok: false, error: error.message };
 
-  if (character) revalidatePath(`/projects/${character.project_id}`);
+  if (asset) revalidatePath(`/projects/${asset.project_id}`);
   return { ok: true };
 }
 
 /**
- * Pre-register a confirmed character with Kling as a Multi-Image Element so multi-shot
- * videos can hold the character's identity across cuts via element_list. Async — the
- * Inngest worker polls Kling for ~3 minutes until the element_id is ready.
+ * Pre-register a confirmed asset (character / location / object) with Kling as a
+ * Multi-Image Element so multi-shot videos can hold the asset's identity across cuts
+ * via element_list. Async — the Inngest worker polls Kling for ~3 minutes until the
+ * element_id is ready.
  */
-export async function bindCharacterToKlingElement(
-  characterId: string,
+export async function bindAssetToKlingElement(
+  assetId: string,
 ): Promise<Result<{ jobId: string }>> {
   const supabase = await createSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();
@@ -173,41 +173,41 @@ export async function bindCharacterToKlingElement(
     return { ok: false, error: "Add a Kling API key at Settings → API Keys first." };
   }
 
-  const { data: character } = await supabase
-    .from("characters")
+  const { data: asset } = await supabase
+    .from("assets")
     .select("id, project_id, confirmed_variation_id, kling_element_id")
-    .eq("id", characterId)
+    .eq("id", assetId)
     .single();
-  if (!character) return { ok: false, error: "Character not found" };
-  if (!character.confirmed_variation_id) {
-    return { ok: false, error: "Confirm a character variation first." };
+  if (!asset) return { ok: false, error: "Asset not found" };
+  if (!asset.confirmed_variation_id) {
+    return { ok: false, error: "Confirm an asset variation first." };
   }
-  if (character.kling_element_id) {
-    return { ok: false, error: "Character is already bound to a Kling element." };
+  if (asset.kling_element_id) {
+    return { ok: false, error: "Asset is already bound to a Kling element." };
   }
 
   const { data: job, error: jobErr } = await supabase
     .from("jobs")
     .insert({
-      project_id: character.project_id,
+      project_id: asset.project_id,
       user_id: userData.user.id,
       type: "kling_bind_element",
       status: "queued",
       provider: "kling",
-      request: { characterId },
+      request: { assetId },
     })
     .select("id")
     .single();
   if (jobErr || !job) return { ok: false, error: jobErr?.message ?? "Failed to enqueue job" };
 
-  const eventData: BindCharacterElementEventData = {
+  const eventData: BindAssetElementEventData = {
     jobId: job.id,
-    projectId: character.project_id,
-    characterId,
+    projectId: asset.project_id,
+    assetId,
     userId: userData.user.id,
   };
-  await inngest.send({ name: "character/bind_kling_element", data: eventData });
+  await inngest.send({ name: "asset/bind_kling_element", data: eventData });
 
-  revalidatePath(`/projects/${character.project_id}`);
+  revalidatePath(`/projects/${asset.project_id}`);
   return { ok: true, data: { jobId: job.id } };
 }

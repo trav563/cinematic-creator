@@ -49,7 +49,7 @@ export const generateMotionPromptsFunction = inngest.createFunction(
       if (!scenes || scenes.length === 0) throw new Error("No scenes to write prompts for");
 
       const { data: characters } = await supabase
-        .from("characters")
+        .from("assets")
         .select("name, role, base_description")
         .eq("project_id", data.projectId)
         .order("created_at");

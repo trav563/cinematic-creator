@@ -1,11 +1,12 @@
 import { inngest } from "./client";
 import { parseScriptFunction } from "./functions/parse-script";
-import { generateCharacterVariationFunction } from "./functions/generate-character-variation";
+import { generateAssetVariationFunction } from "./functions/generate-asset-variation";
 import { proposeStoryboardFunction } from "./functions/propose-storyboard";
 import { generateKeyframeFunction } from "./functions/generate-keyframe";
 import { generateVideoFunction } from "./functions/generate-video";
-import { bindCharacterElementFunction } from "./functions/bind-character-element";
+import { bindAssetElementFunction } from "./functions/bind-asset-element";
 import { generateMotionPromptsFunction } from "./functions/generate-motion-prompts";
+import { derivePairedFrameFunction } from "./functions/derive-paired-frame";
 
 /**
  * Smoke-test function for Phase 0. Sending an event with name "app/hello" via the
@@ -28,10 +29,11 @@ export const helloFunction = inngest.createFunction(
 export const functions = [
   helloFunction,
   parseScriptFunction,
-  generateCharacterVariationFunction,
+  generateAssetVariationFunction,
   proposeStoryboardFunction,
   generateKeyframeFunction,
   generateVideoFunction,
-  bindCharacterElementFunction,
+  bindAssetElementFunction,
   generateMotionPromptsFunction,
+  derivePairedFrameFunction,
 ];

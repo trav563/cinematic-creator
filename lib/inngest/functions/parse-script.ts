@@ -70,14 +70,15 @@ export const parseScriptFunction = inngest.createFunction(
         })
         .eq("id", data.projectId);
 
-      // 2. Insert characters
-      if (parsed.characters.length > 0) {
-        await supabase.from("characters").insert(
-          parsed.characters.map((c) => ({
+      // 2. Insert assets (characters, locations, objects)
+      if (parsed.assets.length > 0) {
+        await supabase.from("assets").insert(
+          parsed.assets.map((a) => ({
             project_id: data.projectId,
-            name: c.name,
-            role: c.role,
-            base_description: c.base_description,
+            name: a.name,
+            kind: a.kind,
+            role: a.role,
+            base_description: a.base_description,
           })),
         );
       }
@@ -103,7 +104,7 @@ export const parseScriptFunction = inngest.createFunction(
         .eq("id", data.jobId);
     });
 
-    return { ok: true, characters: parsed.characters.length, scenes: parsed.scenes.length };
+    return { ok: true, assets: parsed.assets.length, scenes: parsed.scenes.length };
   },
 );
 

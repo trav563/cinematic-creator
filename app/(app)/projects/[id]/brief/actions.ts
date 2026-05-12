@@ -38,28 +38,28 @@ export async function updateBrief(
   return { ok: true };
 }
 
-const CharacterUpdateSchema = z.object({
+const AssetUpdateSchema = z.object({
   name: z.string().min(1),
   role: z.string().nullable().optional(),
   base_description: z.string().nullable().optional(),
 });
 
-export async function updateCharacter(
-  characterId: string,
-  patch: z.infer<typeof CharacterUpdateSchema>,
+export async function updateAsset(
+  assetId: string,
+  patch: z.infer<typeof AssetUpdateSchema>,
 ): Promise<Result> {
-  const parsed = CharacterUpdateSchema.safeParse(patch);
-  if (!parsed.success) return { ok: false, error: "Invalid character fields" };
+  const parsed = AssetUpdateSchema.safeParse(patch);
+  if (!parsed.success) return { ok: false, error: "Invalid asset fields" };
 
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.from("characters").update(parsed.data).eq("id", characterId);
+  const { error } = await supabase.from("assets").update(parsed.data).eq("id", assetId);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
 
-export async function deleteCharacter(characterId: string): Promise<Result> {
+export async function deleteAsset(assetId: string): Promise<Result> {
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.from("characters").delete().eq("id", characterId);
+  const { error } = await supabase.from("assets").delete().eq("id", assetId);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }

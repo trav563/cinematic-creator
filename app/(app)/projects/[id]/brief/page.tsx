@@ -43,8 +43,8 @@ export default async function BriefPage({ params }: PageProps<"/projects/[id]/br
     return <JobWaiting projectId={id} jobId={job.id} initialStatus={job.status} initialError={job.error} />;
   }
 
-  const { data: characters } = await supabase
-    .from("characters")
+  const { data: assets } = await supabase
+    .from("assets")
     .select("id, name, role, base_description")
     .eq("project_id", id)
     .order("created_at");
@@ -58,7 +58,7 @@ export default async function BriefPage({ params }: PageProps<"/projects/[id]/br
   return (
     <BriefReview
       project={project}
-      characters={characters ?? []}
+      assets={assets ?? []}
       scenes={scenes ?? []}
     />
   );

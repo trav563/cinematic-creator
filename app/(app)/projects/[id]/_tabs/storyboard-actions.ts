@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { inngest } from "@/lib/inngest/client";
 import type { ProposeStoryboardEventData } from "@/lib/inngest/functions/propose-storyboard";
 import type { GenerateKeyframeEventData } from "@/lib/inngest/functions/generate-keyframe";
+import type { DerivePairedFrameEventData } from "@/lib/inngest/functions/derive-paired-frame";
 
 type Result<T = void> = { ok: true; data?: T } | { ok: false; error: string };
 
@@ -154,6 +155,65 @@ export async function generateAllKeyframes(projectId: string): Promise<Result<{ 
 /**
  * Revert / pin a specific keyframe from history as the current one for its scene.
  */
+/**
+ * For PAIR scenes: derive the paired frame from the existing anchor. The Inngest
+ * worker calls Claude to compose a Gemini edit instruction, then runs the edit.
+ */
+export async function derivePairedFrame(sceneId: string): Promise<Result<{ jobId: string }>> {
+  const auth = await requireUserAndGoogle();
+  if (!auth.ok) return auth;
+
+  const { data: scene } = await auth.supabase
+    .from("scenes")
+    .select(
+      "project_id, frame_role, pair_anchor, current_start_keyframe_id, current_end_keyframe_id",
+    )
+    .eq("id", sceneId)
+    .single();
+  if (!scene) return { ok: false, error: "Scene not found" };
+  if (scene.frame_role !== "PAIR") {
+    return { ok: false, error: "Only PAIR scenes have paired frames to derive." };
+  }
+  if (!scene.pair_anchor) {
+    return { ok: false, error: "Scene is missing pair_anchor — regenerate the storyboard." };
+  }
+  const anchorKfId =
+    scene.pair_anchor === "start"
+      ? scene.current_start_keyframe_id
+      : scene.current_end_keyframe_id;
+  if (!anchorKfId) {
+    return {
+      ok: false,
+      error: `Generate the anchor (${scene.pair_anchor}) frame first before deriving the paired frame.`,
+    };
+  }
+
+  const { data: job, error: jobErr } = await auth.supabase
+    .from("jobs")
+    .insert({
+      project_id: scene.project_id,
+      user_id: auth.userId,
+      type: "derive_paired_frame",
+      status: "queued",
+      provider: "google_ai_studio",
+      request: { sceneId },
+    })
+    .select("id")
+    .single();
+  if (jobErr || !job) return { ok: false, error: jobErr?.message ?? "Failed to enqueue job" };
+
+  const eventData: DerivePairedFrameEventData = {
+    jobId: job.id,
+    projectId: scene.project_id,
+    sceneId,
+    userId: auth.userId,
+  };
+  await inngest.send({ name: "scene/derive_paired_frame", data: eventData });
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true, data: { jobId: job.id } };
+}
+
 export async function confirmKeyframeVariation(keyframeId: string): Promise<Result> {
   const supabase = await createSupabaseServerClient();
   const { data: userData } = await supabase.auth.getUser();

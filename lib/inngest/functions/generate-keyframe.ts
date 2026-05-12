@@ -42,7 +42,7 @@ export const generateKeyframeFunction = inngest.createFunction(
     const ctx = await step.run("load-context", async () => {
       const { data: scene } = await supabase
         .from("scenes")
-        .select("scene_number, act, beat, camera, frame_role, anchor_direction, description")
+        .select("scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description")
         .eq("id", data.sceneId)
         .single();
       if (!scene) throw new Error("Scene not found");
@@ -54,28 +54,28 @@ export const generateKeyframeFunction = inngest.createFunction(
         .single();
       if (!project) throw new Error("Project not found");
 
-      // Load all characters in the project that have a confirmed model sheet — we'll
-      // match these by name against the scene description to figure out which references
-      // to attach.
-      const { data: characters } = await supabase
-        .from("characters")
-        .select("id, name, role, confirmed_variation_id")
+      // Load all assets (characters, locations, objects) in the project that have a
+      // confirmed model sheet — we'll match these by name against the scene description
+      // to figure out which references to attach.
+      const { data: assets } = await supabase
+        .from("assets")
+        .select("id, name, kind, role, confirmed_variation_id")
         .eq("project_id", data.projectId)
         .not("confirmed_variation_id", "is", null);
 
       // Get the image_url path for each confirmed variation
       const refImagePaths: Array<{ name: string; role: string | null; path: string }> = [];
-      if (characters && characters.length) {
-        const ids = characters.map((c) => c.confirmed_variation_id).filter(Boolean) as string[];
+      if (assets && assets.length) {
+        const ids = assets.map((a) => a.confirmed_variation_id).filter(Boolean) as string[];
         const { data: variations } = await supabase
-          .from("character_variations")
+          .from("asset_variations")
           .select("id, image_url")
           .in("id", ids);
         const byId = new Map((variations ?? []).map((v) => [v.id, v.image_url]));
-        for (const c of characters) {
-          if (!c.confirmed_variation_id) continue;
-          const path = byId.get(c.confirmed_variation_id);
-          if (path) refImagePaths.push({ name: c.name, role: c.role, path });
+        for (const a of assets) {
+          if (!a.confirmed_variation_id) continue;
+          const path = byId.get(a.confirmed_variation_id);
+          if (path) refImagePaths.push({ name: a.name, role: a.role, path });
         }
       }
 
@@ -123,7 +123,15 @@ export const generateKeyframeFunction = inngest.createFunction(
         camera: ctx.scene.camera,
         beat: ctx.scene.beat,
         act: ctx.scene.act,
-        frameRole: ctx.scene.frame_role as "SINGLE" | "PAIR-START" | "PAIR-END",
+        // Map the new SINGLE/PAIR model to the buildKeyframePrompt's older
+        // SINGLE/PAIR-START/PAIR-END union — for PAIR scenes the anchor side determines
+        // which composition guidance applies (PAIR-START = clean before, PAIR-END = money shot).
+        frameRole:
+          ctx.scene.frame_role === "PAIR"
+            ? ctx.scene.pair_anchor === "end"
+              ? "PAIR-END"
+              : "PAIR-START"
+            : (ctx.scene.frame_role as "SINGLE" | "PAIR-START" | "PAIR-END"),
         anchorDirection: ctx.scene.anchor_direction,
         aspectRatio: (ctx.project.aspect_ratio ?? "16:9") as AspectRatio,
         stylePreset: (ctx.project.style_preset ?? "cinematic_blockbuster") as StylePreset,
@@ -142,32 +150,54 @@ export const generateKeyframeFunction = inngest.createFunction(
     });
 
     await step.run("persist", async () => {
-      // Mark prior keyframes as not current
+      // Determine the role this keyframe plays based on the scene's frame_role.
+      // - SINGLE → 'single' (current_keyframe_id)
+      // - PAIR → role matches pair_anchor (start or end), goes into the matching
+      //   current_(start|end)_keyframe_id slot. The other side is derived later
+      //   via the derive-paired-frame worker.
+      // - PAIR-START / PAIR-END (legacy from old projects) → maps to 'start' / 'end'
+      let role: "single" | "start" | "end" = "single";
+      if (ctx.scene.frame_role === "PAIR") {
+        role = (ctx.scene.pair_anchor as "start" | "end" | null) ?? "start";
+      } else if (ctx.scene.frame_role === "PAIR-START") {
+        role = "start";
+      } else if (ctx.scene.frame_role === "PAIR-END") {
+        role = "end";
+      }
+
+      // Mark prior keyframes for the SAME role as not current (so multiple roles
+      // can coexist on a PAIR scene without clobbering each other).
       await supabase
         .from("scene_keyframes")
         .update({ is_current: false })
-        .eq("scene_id", data.sceneId);
+        .eq("scene_id", data.sceneId)
+        .eq("role", role);
 
       await supabase.from("scene_keyframes").insert({
         id: result.keyframeId,
         scene_id: data.sceneId,
-        role: ctx.scene.frame_role === "PAIR-END" ? "end" : ctx.scene.frame_role === "PAIR-START" ? "start" : "single",
+        role,
         image_url: result.path,
         prompt_used: prompt,
         is_current: true,
       });
 
-      await supabase
-        .from("scenes")
-        .update({
-          current_keyframe_id: result.keyframeId,
-          status: "keyframed",
-        })
-        .eq("id", data.sceneId);
+      const sceneUpdate: Record<string, unknown> = { status: "keyframed" };
+      if (role === "single") {
+        sceneUpdate.current_keyframe_id = result.keyframeId;
+      } else if (role === "start") {
+        sceneUpdate.current_start_keyframe_id = result.keyframeId;
+        // Also set current_keyframe_id for backward-compat with code that reads it
+        sceneUpdate.current_keyframe_id = result.keyframeId;
+      } else {
+        sceneUpdate.current_end_keyframe_id = result.keyframeId;
+        sceneUpdate.current_keyframe_id = result.keyframeId;
+      }
+      await supabase.from("scenes").update(sceneUpdate).eq("id", data.sceneId);
 
       await supabase
         .from("jobs")
-        .update({ status: "succeeded", result: { keyframe_path: result.path } })
+        .update({ status: "succeeded", result: { keyframe_path: result.path, role } })
         .eq("id", data.jobId);
     });
 

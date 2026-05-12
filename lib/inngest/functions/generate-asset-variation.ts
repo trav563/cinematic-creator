@@ -3,27 +3,30 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getProviderKey } from "@/lib/providers/keys";
 import { generateImage } from "@/lib/providers/gemini";
 import { downloadAsServiceBase64, uploadAsService } from "@/lib/storage";
-import { buildCharacterModelSheetPrompt } from "@/lib/prompts/character-prompts";
+import {
+  buildAssetModelSheetPrompt,
+  type AssetKind,
+} from "@/lib/prompts/asset-prompts";
 import type { StylePreset } from "@/lib/prompts/loader";
 
-export interface GenerateCharacterVariationEventData {
+export interface GenerateAssetVariationEventData {
   jobId: string;
   projectId: string;
-  characterId: string;
+  assetId: string;
   userId: string;
   editInstruction?: string;
   variationCount?: number; // default 3
 }
 
-export const generateCharacterVariationFunction = inngest.createFunction(
+export const generateAssetVariationFunction = inngest.createFunction(
   {
-    id: "generate-character-variation",
-    name: "Generate character model-sheet variations",
-    triggers: [{ event: "character/generate_variation" }],
+    id: "generate-asset-variation",
+    name: "Generate asset model-sheet variations",
+    triggers: [{ event: "asset/generate_variation" }],
     retries: 1,
   },
   async ({ event, step }) => {
-    const data = event.data as GenerateCharacterVariationEventData;
+    const data = event.data as GenerateAssetVariationEventData;
     const variationCount = data.variationCount ?? 3;
     const supabase = createSupabaseServiceClient();
 
@@ -32,12 +35,12 @@ export const generateCharacterVariationFunction = inngest.createFunction(
     });
 
     const context = await step.run("load-context", async () => {
-      const { data: character } = await supabase
-        .from("characters")
-        .select("id, name, role, base_description, reference_image_urls")
-        .eq("id", data.characterId)
+      const { data: asset } = await supabase
+        .from("assets")
+        .select("id, name, kind, role, base_description, reference_image_urls")
+        .eq("id", data.assetId)
         .single();
-      if (!character) throw new Error(`Character ${data.characterId} not found`);
+      if (!asset) throw new Error(`Asset ${data.assetId} not found`);
 
       const { data: project } = await supabase
         .from("projects")
@@ -46,7 +49,7 @@ export const generateCharacterVariationFunction = inngest.createFunction(
         .single();
       if (!project) throw new Error(`Project ${data.projectId} not found`);
 
-      return { character, project };
+      return { asset, project };
     });
 
     const apiKey = await step.run("fetch-key", () =>
@@ -54,7 +57,7 @@ export const generateCharacterVariationFunction = inngest.createFunction(
     );
 
     const refImages = await step.run("load-refs", async () => {
-      const paths = (context.character.reference_image_urls ?? []) as string[];
+      const paths = (context.asset.reference_image_urls ?? []) as string[];
       const loaded = [];
       for (const p of paths) {
         try {
@@ -68,10 +71,11 @@ export const generateCharacterVariationFunction = inngest.createFunction(
     });
 
     const prompt = await step.run("build-prompt", () =>
-      buildCharacterModelSheetPrompt({
-        characterName: context.character.name,
-        baseDescription: context.character.base_description,
-        role: context.character.role,
+      buildAssetModelSheetPrompt({
+        assetName: context.asset.name,
+        baseDescription: context.asset.base_description,
+        role: context.asset.role,
+        kind: (context.asset.kind ?? null) as AssetKind | null,
         scope: context.project.scope,
         stylePreset: (context.project.style_preset ?? "cinematic_blockbuster") as StylePreset,
         hasReferenceImages: refImages.length > 0,
@@ -85,7 +89,7 @@ export const generateCharacterVariationFunction = inngest.createFunction(
         step.run(`generate-variation-${i}`, async () => {
           const result = await generateImage({ apiKey, prompt, referenceImages: refImages });
           const variationId = crypto.randomUUID();
-          const path = `${data.userId}/${data.projectId}/characters/${data.characterId}/variations/${variationId}.png`;
+          const path = `${data.userId}/${data.projectId}/assets/${data.assetId}/variations/${variationId}.png`;
           await uploadAsService(path, result.bytes, result.mimeType);
           return { variationId, path };
         }),
@@ -93,10 +97,10 @@ export const generateCharacterVariationFunction = inngest.createFunction(
     );
 
     await step.run("persist", async () => {
-      await supabase.from("character_variations").insert(
+      await supabase.from("asset_variations").insert(
         variations.map((v) => ({
           id: v.variationId,
-          character_id: data.characterId,
+          asset_id: data.assetId,
           image_url: v.path, // store path, not signed URL — sign on render
           prompt_used: prompt,
         })),

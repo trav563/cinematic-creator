@@ -1,13 +1,21 @@
 import type { StylePreset } from "./loader";
 
-export type AssetType = "character" | "location" | "vehicle" | "prop";
+/**
+ * AssetKind comes from the assets table column. We map vehicles into the "object"
+ * kind (props/vehicles share the same model-sheet pattern); anything else uses the
+ * appropriate prompt below. The detectAssetType heuristic is kept for backward compat
+ * with old projects that don't have an explicit kind set yet.
+ */
+export type AssetKind = "character" | "location" | "object";
 
 interface ModelSheetPromptArgs {
-  characterName: string;
+  assetName: string;
   baseDescription: string | null;
   role: string | null;
   scope: string | null;
   stylePreset: StylePreset;
+  /** Explicit kind from the asset row. If null, falls back to detectAssetType(role). */
+  kind: AssetKind | null;
   hasReferenceImages: boolean;
   editInstruction?: string;
 }
@@ -24,13 +32,10 @@ const STYLE_RENDER_LINES: Record<StylePreset, string> = {
 };
 
 /**
- * Heuristically classify what kind of asset we're rendering. The "characters" table
- * actually holds all reference assets (a vestige of the data model — Opus tends to
- * extract iconic locations and signature props as "characters" during parse_script).
- *
- * Each type needs a structurally different model-sheet prompt per master_workflow §3.
+ * Backward-compat heuristic for old assets that don't have an explicit kind set.
+ * New projects always set kind explicitly via parse_script.
  */
-export function detectAssetType(role: string | null): AssetType {
+export function detectAssetType(role: string | null): AssetKind {
   if (!role) return "character";
   const r = role.toLowerCase();
   if (
@@ -46,6 +51,13 @@ export function detectAssetType(role: string | null): AssetType {
   )
     return "location";
   if (
+    r.includes("weapon") ||
+    r.includes("artifact") ||
+    r.includes("item") ||
+    r.includes("prop") ||
+    r.includes("relic") ||
+    r.includes("sword") ||
+    r.includes("staff") ||
     r.includes("vehicle") ||
     r.includes("ship") ||
     r.includes("mount") ||
@@ -53,34 +65,22 @@ export function detectAssetType(role: string | null): AssetType {
     r.includes("car") ||
     r.includes("mech")
   )
-    return "vehicle";
-  if (
-    r.includes("weapon") ||
-    r.includes("artifact") ||
-    r.includes("item") ||
-    r.includes("prop") ||
-    r.includes("relic") ||
-    r.includes("sword") ||
-    r.includes("staff")
-  )
-    return "prop";
+    return "object";
   return "character";
 }
 
-export function buildCharacterModelSheetPrompt(args: ModelSheetPromptArgs): string {
+export function buildAssetModelSheetPrompt(args: ModelSheetPromptArgs): string {
   const renderLine = STYLE_RENDER_LINES[args.stylePreset];
   const editClause = args.editInstruction
     ? `\n\nApply this specific change: ${args.editInstruction}`
     : "";
-  const assetType = detectAssetType(args.role);
+  const kind = args.kind ?? detectAssetType(args.role);
 
-  switch (assetType) {
+  switch (kind) {
     case "location":
       return buildLocationPrompt(args, renderLine, editClause);
-    case "vehicle":
-      return buildVehiclePrompt(args, renderLine, editClause);
-    case "prop":
-      return buildPropPrompt(args, renderLine, editClause);
+    case "object":
+      return buildObjectPrompt(args, renderLine, editClause);
     case "character":
     default:
       return buildCharacterPrompt(args, renderLine, editClause);
@@ -93,7 +93,7 @@ function buildCharacterPrompt(
   editClause: string,
 ): string {
   if (args.hasReferenceImages) {
-    return `The attached image is the canonical reference for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}. Use it as the source of truth.
+    return `The attached image is the canonical reference for ${args.assetName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}. Use it as the source of truth.
 
 Your job is to produce a clean three-angle character model sheet that matches this reference exactly:
 
@@ -116,7 +116,7 @@ WHAT YOU ARE COMPOSING (this is what the reference doesn't already show):
 The output is a clean reference sheet, not a poster or scene. Keep the figure visually consistent across all three angles — same costume, same palette, same gear.${editClause}`;
   }
 
-  return `Generate a clean character model sheet for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}.
+  return `Generate a clean character model sheet for ${args.assetName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}.
 
 Character: ${args.baseDescription ?? "Use the role and scope above to infer canonical appearance for this IP."}
 
@@ -134,7 +134,7 @@ function buildLocationPrompt(
   editClause: string,
 ): string {
   if (args.hasReferenceImages) {
-    return `The attached image is the canonical reference for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}. Use it as the source of truth.
+    return `The attached image is the canonical reference for ${args.assetName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}. Use it as the source of truth.
 
 Your job is to produce a clean location reference sheet that matches this reference exactly:
 
@@ -156,7 +156,7 @@ WHAT YOU ARE COMPOSING (this is what the reference doesn't already show):
 The output is a reference sheet for downstream scene generation, not a single poster shot. Keep the location visually consistent across all three views — same architecture, same palette, same era.${editClause}`;
   }
 
-  return `Generate a location reference sheet for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}.
+  return `Generate a location reference sheet for ${args.assetName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}.
 
 ${args.baseDescription ?? "Use the scope above to infer canonical architecture and palette for this IP."}
 
@@ -165,54 +165,28 @@ Composition:
 - Render aesthetic: ${renderLine}${editClause}`;
 }
 
-function buildVehiclePrompt(
+function buildObjectPrompt(
   args: ModelSheetPromptArgs,
   renderLine: string,
   editClause: string,
 ): string {
   if (args.hasReferenceImages) {
-    return `The attached image is the canonical reference for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}. Use it as the source of truth.
+    return `The attached image is the canonical reference for ${args.assetName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}. Use it as the source of truth.
 
-Your job is to produce a clean vehicle reference sheet that matches this reference exactly:
-
-REFERENCE PRESERVATION (highest priority):
-- Match the silhouette, scale, paneling, weapons, decals, and color palette exactly
-- DO NOT redesign or reinvent the vehicle
-
-WHAT YOU ARE COMPOSING:
-- 16:9 horizontal layout, three angles arranged left-to-right: front view, 3/4 hero angle, rear view
-- Vehicle isolated on neutral seamless mid-gray background, even neutral key lighting (studio reference)
-- Render aesthetic: ${renderLine}${editClause}`;
-  }
-
-  return `Generate a vehicle reference sheet for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}.
-
-${args.baseDescription ?? "Use the role and scope to infer canonical design."}
-
-Composition: 16:9, three angles (front, 3/4, rear) on neutral gray background, even key lighting. Render aesthetic: ${renderLine}${editClause}`;
-}
-
-function buildPropPrompt(
-  args: ModelSheetPromptArgs,
-  renderLine: string,
-  editClause: string,
-): string {
-  if (args.hasReferenceImages) {
-    return `The attached image is the canonical reference for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}. Use it as the source of truth.
-
-Your job is to produce a clean prop reference sheet that matches this reference exactly:
+Your job is to produce a clean object/prop reference sheet that matches this reference exactly:
 
 REFERENCE PRESERVATION (highest priority):
 - Match the form, silhouette, materials, ornament, and color palette exactly
-- DO NOT redesign, simplify, or restyle the prop
+- DO NOT redesign, simplify, or restyle the object
 
 WHAT YOU ARE COMPOSING:
-- 16:9 horizontal layout, two or three angles of the prop arranged horizontally
-- Prop isolated on neutral seamless mid-gray background, even neutral key lighting (studio reference, not scene atmosphere)
+- 16:9 horizontal layout, two or three angles of the object arranged horizontally
+- Object isolated on neutral seamless mid-gray background, even neutral key lighting (studio reference, not scene atmosphere)
+- For wearable items (helmet, boots, gauntlets): include both worn-on-stand AND a detail close-up
 - Render aesthetic: ${renderLine}${editClause}`;
   }
 
-  return `Generate a prop reference sheet for ${args.characterName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}.
+  return `Generate an object reference sheet for ${args.assetName}${args.role ? ` (${args.role})` : ""}${args.scope ? ` from ${args.scope}` : ""}.
 
 ${args.baseDescription ?? "Use the role and scope to infer canonical design."}
 

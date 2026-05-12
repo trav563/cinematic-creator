@@ -10,11 +10,11 @@ import { Label } from "@/components/ui/label";
 import { Lightbox } from "@/components/ui/lightbox";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
-  uploadCharacterReference,
-  removeCharacterReference,
-  generateCharacterVariations,
+  uploadAssetReference,
+  removeAssetReference,
+  generateAssetVariations,
   confirmVariation,
-  bindCharacterToKlingElement,
+  bindAssetToKlingElement,
 } from "./actions";
 
 interface Variation {
@@ -35,7 +35,7 @@ interface ActiveJob {
   error: string | null;
 }
 
-interface Character {
+interface Asset {
   id: string;
   name: string;
   role: string | null;
@@ -49,17 +49,17 @@ interface Character {
   activeBindJob: ActiveJob | null;
 }
 
-export function CharacterCard({ character, projectId: _projectId }: { character: Character; projectId: string }) {
+export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; projectId: string }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editInstruction, setEditInstruction] = useState("");
-  const [activeJob, setActiveJob] = useState<ActiveJob | null>(character.activeJob);
-  const [activeBindJob, setActiveBindJob] = useState<ActiveJob | null>(character.activeBindJob);
+  const [activeJob, setActiveJob] = useState<ActiveJob | null>(asset.activeJob);
+  const [activeBindJob, setActiveBindJob] = useState<ActiveJob | null>(asset.activeBindJob);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [lightboxRef, setLightboxRef] = useState<RefImage | null>(null);
   const lightboxVariation =
-    lightboxIndex !== null ? character.variations[lightboxIndex] ?? null : null;
+    lightboxIndex !== null ? asset.variations[lightboxIndex] ?? null : null;
 
   // Watch for job completion. Two strategies in parallel for resilience:
   //   (a) Supabase Realtime postgres_changes — instant, but requires the table to be in
@@ -97,12 +97,12 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
   // When the server says the active job is gone (succeeded/cleared), drop our local
   // optimistic state so the UI reflects the truth.
   useEffect(() => {
-    setActiveJob(character.activeJob);
-  }, [character.activeJob]);
+    setActiveJob(asset.activeJob);
+  }, [asset.activeJob]);
 
   useEffect(() => {
-    setActiveBindJob(character.activeBindJob);
-  }, [character.activeBindJob]);
+    setActiveBindJob(asset.activeBindJob);
+  }, [asset.activeBindJob]);
 
   // Watch the Kling-bind job in realtime as well.
   const activeBindJobId = activeBindJob?.id ?? null;
@@ -132,7 +132,7 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
 
   function handleBindKlingElement() {
     startTransition(async () => {
-      const result = await bindCharacterToKlingElement(character.id);
+      const result = await bindAssetToKlingElement(asset.id);
       if (!result.ok) {
         toast.error(result.error);
         return;
@@ -148,7 +148,7 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
     const formData = new FormData();
     for (const f of Array.from(files)) formData.append("files", f);
     startTransition(async () => {
-      const result = await uploadCharacterReference(character.id, formData);
+      const result = await uploadAssetReference(asset.id, formData);
       if (!result.ok) toast.error(result.error);
       else toast.success(`Uploaded ${result.data?.paths.length ?? 0} reference${result.data?.paths.length === 1 ? "" : "s"}`);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -157,14 +157,14 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
 
   function handleRemoveRef(path: string) {
     startTransition(async () => {
-      const result = await removeCharacterReference(character.id, path);
+      const result = await removeAssetReference(asset.id, path);
       if (!result.ok) toast.error(result.error);
     });
   }
 
   function handleGenerate() {
     startTransition(async () => {
-      const result = await generateCharacterVariations(character.id, editInstruction || undefined);
+      const result = await generateAssetVariations(asset.id, editInstruction || undefined);
       if (!result.ok) {
         toast.error(result.error);
         return;
@@ -176,10 +176,10 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
 
   function handleConfirm(variationId: string) {
     startTransition(async () => {
-      const result = await confirmVariation(character.id, variationId);
+      const result = await confirmVariation(asset.id, variationId);
       if (!result.ok) toast.error(result.error);
       else {
-        toast.success(`${character.name} locked`);
+        toast.success(`${asset.name} locked`);
         setLightboxIndex(null);
       }
     });
@@ -187,19 +187,19 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
 
   const isGenerating = activeJob?.status === "queued" || activeJob?.status === "running";
   const isBinding = activeBindJob?.status === "queued" || activeBindJob?.status === "running";
-  const isBound = !!character.kling_element_id;
+  const isBound = !!asset.kling_element_id;
 
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5 space-y-4">
       <header className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-medium">{character.name}</h3>
-          {character.role && (
-            <p className="text-xs text-[var(--muted)]">{character.role}</p>
+          <h3 className="text-base font-medium">{asset.name}</h3>
+          {asset.role && (
+            <p className="text-xs text-[var(--muted)]">{asset.role}</p>
           )}
         </div>
         <div className="flex flex-col items-end gap-1">
-          {character.confirmed_variation_id && (
+          {asset.confirmed_variation_id && (
             <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-400">
               ✓ Confirmed
             </span>
@@ -207,7 +207,7 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
           {isBound && (
             <span
               className="rounded bg-amber-500/10 px-1.5 py-0.5 text-xs text-amber-400"
-              title={`Kling element ID: ${character.kling_element_id}`}
+              title={`Kling element ID: ${asset.kling_element_id}`}
             >
               ✓ Bound (Kling)
             </span>
@@ -215,14 +215,14 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
         </div>
       </header>
 
-      {character.base_description && (
-        <p className="text-xs text-[var(--muted)]">{character.base_description}</p>
+      {asset.base_description && (
+        <p className="text-xs text-[var(--muted)]">{asset.base_description}</p>
       )}
 
       <section className="space-y-2">
         <Label>Reference images</Label>
         <div className="flex flex-wrap gap-2">
-          {character.refs.map((ref) =>
+          {asset.refs.map((ref) =>
             ref.url ? (
               <div key={ref.path} className="group relative h-20 w-20 overflow-hidden rounded border border-[var(--border)]">
                 <button
@@ -266,10 +266,10 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
           placeholder="Optional edit instruction (e.g. 'add yellow stripe across her shirt')"
           disabled={isGenerating}
         />
-        <Button onClick={handleGenerate} disabled={isPending || isGenerating || character.refs.length === 0}>
+        <Button onClick={handleGenerate} disabled={isPending || isGenerating || asset.refs.length === 0}>
           {isGenerating
             ? `${activeJob?.status === "running" ? "Generating" : "Queued"}…`
-            : character.variations.length === 0
+            : asset.variations.length === 0
               ? "Generate 3 variations"
               : "Regenerate"}
         </Button>
@@ -278,11 +278,11 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
         )}
       </section>
 
-      {character.confirmed_variation_id && !isBound && (
+      {asset.confirmed_variation_id && !isBound && (
         <section className="space-y-2 rounded border border-amber-500/30 bg-amber-500/5 p-3">
           <Label className="text-xs">Video consistency</Label>
           <p className="text-xs text-[var(--muted)]">
-            Pre-register {character.name} with Kling so multi-shot videos preserve identity across cuts. Takes ~1-3 minutes; only needed once per character.
+            Pre-register {asset.name} with Kling so multi-shot videos preserve identity across cuts. Takes ~1-3 minutes; only needed once per asset.
           </p>
           <Button
             onClick={handleBindKlingElement}
@@ -301,24 +301,24 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
         </section>
       )}
 
-      {character.variations.length > 0 && (
+      {asset.variations.length > 0 && (
         <section className="space-y-2">
-          <Label>Variations ({character.variations.length})</Label>
+          <Label>Variations ({asset.variations.length})</Label>
           <div className="grid grid-cols-3 gap-2">
-            {character.variations.map((v, idx) =>
+            {asset.variations.map((v, idx) =>
               v.signed_url ? (
                 <button
                   key={v.id}
                   type="button"
                   onClick={() => setLightboxIndex(idx)}
                   className={`group relative aspect-video overflow-hidden rounded border-2 transition-colors ${
-                    character.confirmed_variation_id === v.id
+                    asset.confirmed_variation_id === v.id
                       ? "border-emerald-400"
                       : "border-[var(--border)] hover:border-white/40"
                   }`}
                 >
                   <Image src={v.signed_url} alt="" fill sizes="200px" className="object-cover" unoptimized />
-                  {character.confirmed_variation_id === v.id && (
+                  {asset.confirmed_variation_id === v.id && (
                     <span className="absolute bottom-1 right-1 rounded bg-emerald-500/80 px-1.5 py-0.5 text-xs text-white">
                       ✓
                     </span>
@@ -327,7 +327,7 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
               ) : null,
             )}
           </div>
-          <p className="text-xs text-[var(--muted)]">Click a variation to inspect it full-size, then confirm to lock as this character&apos;s model sheet.</p>
+          <p className="text-xs text-[var(--muted)]">Click a variation to inspect it full-size, then confirm to lock as this asset&apos;s model sheet.</p>
         </section>
       )}
 
@@ -335,14 +335,14 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
         open={lightboxIndex !== null}
         onClose={() => setLightboxIndex(null)}
         src={lightboxVariation?.signed_url ?? null}
-        alt={`${character.name} variation`}
+        alt={`${asset.name} variation`}
         indexLabel={
           lightboxIndex !== null
-            ? `${lightboxIndex + 1} of ${character.variations.length}`
+            ? `${lightboxIndex + 1} of ${asset.variations.length}`
             : undefined
         }
         caption={
-          character.confirmed_variation_id === lightboxVariation?.id
+          asset.confirmed_variation_id === lightboxVariation?.id
             ? "✓ Currently confirmed"
             : "Use ← → to flip between variations. Confirm to lock as the canonical model sheet."
         }
@@ -352,12 +352,12 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
             : undefined
         }
         onNext={
-          lightboxIndex !== null && lightboxIndex < character.variations.length - 1
+          lightboxIndex !== null && lightboxIndex < asset.variations.length - 1
             ? () => setLightboxIndex(lightboxIndex + 1)
             : undefined
         }
         footer={
-          lightboxVariation && character.confirmed_variation_id !== lightboxVariation.id ? (
+          lightboxVariation && asset.confirmed_variation_id !== lightboxVariation.id ? (
             <Button onClick={() => handleConfirm(lightboxVariation.id)} disabled={isPending}>
               {isPending ? "Confirming…" : "Confirm this variation"}
             </Button>
@@ -369,7 +369,7 @@ export function CharacterCard({ character, projectId: _projectId }: { character:
         open={!!lightboxRef}
         onClose={() => setLightboxRef(null)}
         src={lightboxRef?.url ?? null}
-        alt={`${character.name} reference`}
+        alt={`${asset.name} reference`}
       />
     </div>
   );

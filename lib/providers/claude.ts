@@ -35,13 +35,20 @@ export const ParsedScriptSchema = z.object({
       .int()
       .describe("Suggested total scene count (18–25 for ~60s, 30–45 for ~2:30)"),
   }),
-  characters: z
+  assets: z
     .array(
       z.object({
-        name: z.string().describe("Character name in snake_case for use as @reference"),
+        name: z.string().describe("Asset name in snake_case (used verbatim in scene descriptions for matching)"),
+        kind: z
+          .enum(["character", "location", "object"])
+          .describe(
+            "character = a person / hero / villain / NPC. location = a named recurring setting (kokiri_village, hyrule_castle). object = a key prop or named item (master_sword, hover_boots, ocarina_of_time). Only extract assets that recur across multiple scenes OR are central to the trailer's identity.",
+          ),
         role: z
           .string()
-          .describe("Role in the story (protagonist, antagonist, ally, etc.)"),
+          .describe(
+            "Role / function in the story. For characters: protagonist / antagonist / ally / mentor. For locations: hub world / dungeon / climactic battleground. For objects: key item / weapon / artifact.",
+          ),
         base_description: z
           .string()
           .describe(
@@ -49,7 +56,9 @@ export const ParsedScriptSchema = z.object({
           ),
       }),
     )
-    .describe("Major characters extracted from the script"),
+    .describe(
+      "Recurring assets extracted from the script: characters, named locations, and key objects/props. Each gets its own model-sheet workflow so scene generations have consistent references.",
+    ),
   scenes: z
     .array(
       z.object({
@@ -102,11 +111,23 @@ export async function parseScript({
 
 ---
 
-You are the planning brain for a trailer pipeline. The user has uploaded a finished script. Extract a deterministic, structured brief — derived facts about the story, the cast of characters, and a rough scene outline — that downstream steps will flesh out.
+You are the planning brain for a trailer pipeline. The user has uploaded a finished script. Extract a deterministic, structured brief — derived facts about the story, the **assets** (characters, locations, and key objects), and a rough scene outline — that downstream steps will flesh out.
 
 The project's rendering identity (above) is the source of truth for camera vocabulary. When extracting the rough scene outline, the action descriptions should imply framing consistent with that identity — do NOT describe scenes in cinematic-film language if the project is gameplay or animation.
 
 You are operating under the rules of the trailer-builder workflow. Apply them — especially the anti-override guardrail (do NOT over-describe character appearances; trust references will be added later) and the frame strategy concepts (though full frame-role tagging happens in a later step).
+
+## Asset extraction (critical)
+
+Extract not just **characters**, but also **named locations** and **key objects** that recur across multiple scenes or are central to the trailer's identity. Each asset gets its own model-sheet workflow so scene generations have consistent references.
+
+- **Characters**: protagonists, antagonists, named allies, recurring NPCs. snake_case names. Examples: \`young_link\`, \`princess_zelda\`, \`ganondorf\`, \`navi\`.
+- **Locations**: named recurring settings or iconic environments. snake_case names. Examples: \`kokiri_village\`, \`hyrule_castle_courtyard\`, \`temple_of_time\`, \`death_mountain_summit\`. Don't extract one-off generic settings like "the forest" or "a hallway".
+- **Objects**: key props, named items, or signature gear. snake_case names. Examples: \`master_sword\`, \`ocarina_of_time\`, \`hover_boots\`, \`master_chief_helmet\`. Don't extract generic items like "a sword" or "a door".
+
+Aim for 3-12 assets total per project. Quality over quantity — every asset will need reference images uploaded by the user, so only extract things that warrant the work.
+
+When you write the rough scene outline, **reference assets by their snake_case name verbatim** in the description (e.g. "young_link wakes in kokiri_village, navi hovers nearby"). The downstream keyframe generator matches these names against the asset library to pull in the right references.
 
 # Master workflow rules (excerpted)
 
@@ -124,7 +145,7 @@ Given the script and the user's settings (aspect ratio, must-include / must-not-
 - Derive the **genre** and **emotional_arc** from the actual narrative beats.
 - Recommend a **runtime** appropriate for the script's density (60s teaser, 2:00 full, 2:30+ final).
 - Recommend a **scene count** consistent with the runtime.
-- Extract **characters** that appear in the script. Use snake_case for names. Keep base_description short and identity-focused — do NOT over-describe appearance (reference images will carry that). Include role.
+- Extract **assets** (characters, locations, key objects) per the asset extraction rules above. Use snake_case for names. Keep base_description short and identity-focused — do NOT over-describe appearance (reference images will carry that). Include role + kind.
 - Produce a **scene outline** following the trailer structure (cold open → world establish → inciting threat → escalation → twist → climax → title). Number sequentially. One-line descriptions only.
 
 Honor the must-include / must-not-include lists. If the script implies content that violates must-not-include, omit or rework it.`;
@@ -181,20 +202,26 @@ export const StoryboardSchema = z.object({
             "Camera angle / shot type (extreme close-up, low angle, wide, tracking, etc.). No two consecutive scenes share the same camera type.",
           ),
         frame_role: z
-          .enum(["SINGLE", "PAIR-START", "PAIR-END"])
+          .enum(["SINGLE", "PAIR"])
           .describe(
-            "SINGLE = one image carries the clip. PAIR-START = anchor on start frame, edit forward to end. PAIR-END = anchor on end frame, edit backward to start.",
+            "SINGLE = one keyframe carries the clip (camera move, simple atmospheric motion, contained action). PAIR = the clip needs two keyframes (start frame and end frame) because the visual change is significant — explosion, transformation, reveal, impact, character entrance.",
+          ),
+        pair_anchor: z
+          .enum(["start", "end"])
+          .nullable()
+          .describe(
+            "For PAIR scenes only: which side is the anchor frame (the side we generate first; the other is editorially derived). 'end' when the end frame is the money shot or the change is additive (explosion, sparks, transformation). 'start' when the start frame is the cleaner reference and the change is subtractive or progressive (smoke clears, character enters frame, impact happens). NULL for SINGLE scenes.",
           ),
         anchor_direction: z
           .string()
           .nullable()
           .describe(
-            "For PAIR scenes: 3-6 word rationale for the anchor choice (e.g. 'anchor end — figure is the money shot'). Null for SINGLE.",
+            "For PAIR scenes: 3-6 word rationale for the anchor choice (e.g. 'anchor end — explosion is the money shot'). Null for SINGLE.",
           ),
         description: z
           .string()
           .describe(
-            "One-line scene description, ~20 words max. Reference characters by name, no over-description (refs will carry the visual).",
+            "One-line scene description, ~20 words max. Reference assets (characters, locations, objects) by their snake_case name verbatim — the keyframe matcher uses these names to attach the right reference images. For PAIR scenes, describe the BOTH the start and end states in the same sentence (e.g. 'young_link draws master_sword from pedestal — beam of light erupts, dust scatters' implies anchor=end with a clean before-state). No over-description of asset appearances (refs carry the visual).",
           ),
       }),
     )
@@ -215,7 +242,13 @@ interface ProposeStoryboardArgs {
   subMode: string | null;
   mustInclude: string[];
   mustNotInclude: string[];
-  characters: Array<{ name: string; role: string | null; base_description: string | null }>;
+  /** All assets (characters, locations, objects) extracted by parse_script. */
+  assets: Array<{
+    name: string;
+    kind: "character" | "location" | "object";
+    role: string | null;
+    base_description: string | null;
+  }>;
   existingScenes: Array<{ scene_number: number; act: string | null; description: string }>;
   targetSceneCount?: number;
 }
@@ -236,10 +269,12 @@ The project's rendering identity (above) is non-negotiable. EVERY camera value y
 
 Other critical rules:
 - **Camera variety within the allowed vocabulary**: no two consecutive scenes share the same camera angle type — but variety draws from the project's allowed list, not generic film vocabulary.
-- **Frame role distribution**: typically 30–50% pair scenes in action-heavy trailers, less in slower ones. Use SINGLE for ambient camera moves, simple atmospheric motion, contained single actions. Use PAIR-START when the change is additive (explosions, sparks, atmosphere). Use PAIR-END when the end frame is the money shot or the change is subtractive of a complex element.
+- **Frame role**: choose SINGLE or PAIR per scene. SINGLE = the scene's clip can be carried by one keyframe + Kling motion (camera pushes, atmospheric motion, contained single actions). PAIR = the visual change between start and end is significant enough that one keyframe can't carry it: explosions, transformations, character entrances/exits, weapon swings landing, reveals, impacts, transitions between cleanly distinct visual states. Aim for ~30-50% PAIR scenes in action-heavy trailers, less in slower contemplative ones.
+- **Pair anchor direction**: for every PAIR scene, set \`pair_anchor\` to either "end" (when the end frame is the money shot — explosion, sword raised in victory, character transformed) or "start" (when the start frame is the cleaner reference and we morph forward — figure walks into frame, smoke clears, weapon draws). The anchor is what we generate first; the other side is editorially derived from it via Gemini's image edit endpoint.
+- **One scene per clip**: each row in the output is ONE Kling-generated clip. Do NOT split a single conceptual shot into separate PAIR-START and PAIR-END rows — that's the old model. A "swing of the sword that catches sunlight" is ONE PAIR scene with anchor=end and a description spanning both states.
 - **Trailer structure**: hook within first 3 seconds (1.5s for vertical), follow the locked emotional arc, identify the existential twist / threat / climax / title moment.
 - **Scope fidelity**: use must-include items, exclude must-not-include items.
-- **Anti-over-description**: scene descriptions reference characters by name only. Do NOT describe character appearances — references handle that.
+- **Asset names verbatim**: scene descriptions reference assets (characters, locations, objects) by their snake_case name verbatim — the keyframe matcher uses these names to attach the right reference images. Do NOT describe asset appearances — references handle that.
 - **Aspect ratio fit**: tailor compositions to the locked aspect ratio (vertical = single-subject, foreground/background depth; horizontal = wider environmental scale).
 
 # Master workflow rules
@@ -252,17 +287,18 @@ ${presetContent}
 
 # Your task
 
-Given the brief, character list, and the rough scene outline, produce the full storyboard table. Use the rough outline as the spine — but you can refine, renumber, add, or merge scenes if the structure improves. Aim for the suggested scene count.
+Given the brief, asset list, and the rough scene outline, produce the full storyboard table. Use the rough outline as the spine — but you can refine, renumber, add, or merge scenes if the structure improves. Aim for the suggested scene count (each row = one Kling clip).
 
-For each scene set ALL columns: scene_number, act, beat, camera, frame_role, anchor_direction (null for SINGLE), description.
+For each scene set ALL columns: scene_number, act, beat, camera, frame_role (SINGLE or PAIR), pair_anchor (start/end for PAIR, null for SINGLE), anchor_direction (rationale for PAIR, null for SINGLE), description.
 
 Run the SELF-CHECK CHECKLIST before delivering:
 - Camera angle variety (no consecutive duplicates)
-- Frame strategy (defensible pair-anchor directions)
+- Frame strategy (every PAIR has a defensible anchor + clear before/after described)
 - Recurring motif chosen and appears across multiple acts
 - Scope fidelity (no excluded elements)
 - Pacing escalates, breathes, climaxes
-- Aspect ratio compositions read correctly`;
+- Aspect ratio compositions read correctly
+- All asset references in descriptions use snake_case names from the asset list`;
 
   const userMessage = `# Brief
 
@@ -278,8 +314,8 @@ ${args.targetSceneCount ? `Target scene count: ${args.targetSceneCount}` : ""}
 # Locked brief YAML
 ${args.briefYaml ?? "(empty)"}
 
-# Characters / assets in the project
-${args.characters.map((c) => `- ${c.name}${c.role ? ` (${c.role})` : ""}${c.base_description ? ` — ${c.base_description}` : ""}`).join("\n")}
+# Assets in the project (use these snake_case names verbatim in scene descriptions)
+${args.assets.map((a) => `- ${a.name} [${a.kind}]${a.role ? ` (${a.role})` : ""}${a.base_description ? ` — ${a.base_description}` : ""}`).join("\n")}
 
 # Existing rough scene outline (refine or replace as needed)
 ${args.existingScenes.map((s) => `${s.scene_number}. [${s.act ?? "?"}] ${s.description}`).join("\n")}`;
@@ -467,4 +503,104 @@ Write motion prompts that feel inevitable for this story, not generic.`;
     throw new Error("Motion prompt generation returned no valid structured output.");
   }
   return response.parsed_output;
+}
+
+// ============ Paired-frame edit instruction composition ============
+
+const PairedFrameEditSchema = z.object({
+  edit_instruction: z
+    .string()
+    .describe(
+      "Natural-language edit instruction to send to Gemini's image edit endpoint. Tells the model what to add / remove / transform from the source keyframe to produce the paired frame. Concrete, specific, ≤300 chars.",
+    ),
+});
+
+interface ComposePairedFrameEditArgs {
+  apiKey: string;
+  /** The whole scene description from the storyboard — describes both start and end states. */
+  sceneDescription: string;
+  /** Which side of the pair was generated as the anchor. We're now deriving the OTHER side. */
+  pairAnchor: "start" | "end";
+  /** Storyboard's brief rationale for the anchor choice. */
+  anchorDirection: string | null;
+  /** Camera, beat, act for context. */
+  camera: string | null;
+  beat: string | null;
+  act: string | null;
+  /** Asset names referenced in this scene (so the instruction can name them). */
+  referencedAssetNames: string[];
+}
+
+/**
+ * Compose the Gemini image-edit instruction that transforms the anchor frame into
+ * its paired counterpart. The instruction is concrete and surgical — name what to
+ * add/remove/transform and explicitly state what should stay identical.
+ */
+export async function composePairedFrameEditInstruction(
+  args: ComposePairedFrameEditArgs,
+): Promise<string> {
+  const client = new Anthropic({ apiKey: args.apiKey });
+
+  const target = args.pairAnchor === "start" ? "END" : "START";
+  const direction =
+    args.pairAnchor === "start"
+      ? "FORWARD in time (the anchor frame is the BEFORE state; you're describing what the scene looks like AFTER the moment lands — explosions visible, character moved, transformation complete)"
+      : "BACKWARD in time (the anchor frame is the AFTER state — the money shot. You're describing what the scene looked like BEFORE the moment landed — explosions removed, character in setup pose, transformation undone)";
+
+  const system = `You are composing a Gemini image-edit instruction. The user has a keyframe representing the ${args.pairAnchor.toUpperCase()} side of a paired Kling clip. You are telling Gemini how to transform that anchor into the ${target} side.
+
+You are working ${direction}.
+
+# What makes a good edit instruction
+
+1. **Concrete, surgical changes**. Name exactly what to add, remove, or transform. Bad: "make it look after the fight". Good: "Add visible smoke clouds and orange embers above the doorway. Remove the unbroken wooden door — replace with splintered fragments scattered on the threshold. Show ${args.referencedAssetNames.join(" / ") || "subjects"} in the same positions and poses."
+
+2. **Preservation clauses are mandatory**. State what must NOT change. Camera position, character poses (when they shouldn't move much), composition, lighting direction, color palette, framing, and any unchanged subjects must be explicitly preserved. Without preservation language, Gemini drifts.
+
+3. **No new characters**. Don't introduce subjects not in the scene description.
+
+4. **Match the scene's narrative**. The full scene description tells you both states. Read it carefully and infer the precise visual change between them.
+
+5. **Concise**. 1-3 sentences. ≤300 chars when possible. Plain English, no markdown, no instructional fluff.
+
+6. **Do NOT describe the anchor frame** — Gemini already has it. Only describe the DELTA: what changes + what stays.
+
+# Examples
+
+PAIR-START (anchor=start, deriving end, direction=FORWARD):
+- Scene: "young_link draws master_sword from pedestal — beam of light erupts, dust scatters"
+- anchor=start (clean before)
+- Output: "Add a vertical beam of golden light erupting from the pedestal where master_sword is being drawn. Add dust motes spiraling upward in the light shaft. Keep young_link's pose, position, and facial expression identical. Keep the temple architecture, camera angle, and surrounding shadows unchanged."
+
+PAIR-END (anchor=end, deriving start, direction=BACKWARD):
+- Scene: "ganondorf's hand crashes through the throne room window, glass shatters in slow motion"
+- anchor=end (climactic shatter)
+- Output: "Remove all flying glass shards and the impact spray — restore the window to fully intact stained glass. Pull ganondorf's fist back outside the window pane (no longer visible inside the room). Keep the throne room interior, lighting, ganondorf's body angle, and the camera composition exactly as shown."`;
+
+  const userMessage = `# Scene context
+Act: ${args.act ?? "(unspecified)"}
+Beat: ${args.beat ?? "(unspecified)"}
+Camera: ${args.camera ?? "(unspecified)"}
+Description (covers both start and end states): ${args.sceneDescription}
+Anchor side: ${args.pairAnchor.toUpperCase()}${args.anchorDirection ? `\nAnchor rationale: ${args.anchorDirection}` : ""}
+Referenced assets: ${args.referencedAssetNames.join(", ") || "(none)"}
+
+Compose the Gemini edit instruction now. Return only the instruction string in the requested schema.`;
+
+  const response = await client.messages.parse({
+    model: "claude-opus-4-7",
+    max_tokens: 4000,
+    thinking: { type: "adaptive" },
+    system,
+    messages: [{ role: "user", content: userMessage }],
+    output_config: {
+      format: zodOutputFormat(PairedFrameEditSchema),
+      effort: "high",
+    },
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("Paired-frame edit instruction generation returned no valid output.");
+  }
+  return response.parsed_output.edit_instruction;
 }

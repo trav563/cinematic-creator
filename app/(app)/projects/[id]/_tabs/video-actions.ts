@@ -215,7 +215,7 @@ export async function regenerateSceneMotionPrompt(
   if (!project) return { ok: false, error: "Project not found" };
 
   const { data: characters } = await supabase
-    .from("characters")
+    .from("assets")
     .select("name, role, base_description")
     .eq("project_id", scene.project_id)
     .order("created_at");

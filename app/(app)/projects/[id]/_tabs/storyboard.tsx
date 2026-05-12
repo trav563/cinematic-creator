@@ -9,7 +9,7 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
   const { data: scenes } = await supabase
     .from("scenes")
     .select(
-      "id, scene_number, act, beat, camera, frame_role, anchor_direction, description, status, current_keyframe_id",
+      "id, scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, status, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id",
     )
     .eq("project_id", projectId)
     .order("scene_number");
@@ -37,27 +37,38 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
   const keyframedScenes = scenesArr.filter((s) => s.current_keyframe_id).length;
   const remainingScenes = totalScenes - keyframedScenes;
 
-  // For scenes with keyframes, fetch + sign the URL
+  // For scenes with keyframes, fetch + sign the URLs. PAIR scenes have separate
+  // start/end frames; SINGLE scenes use current_keyframe_id (which we mirror onto
+  // start/end for backward compat).
   const enrichedScenes = await Promise.all(
     scenesArr.map(async (s) => {
-      let keyframeUrl: string | null = null;
-      let keyframePath: string | null = null;
-      if (s.current_keyframe_id) {
-        const { data: kf } = await supabase
+      const ids = [
+        s.current_start_keyframe_id ?? s.current_keyframe_id,
+        s.current_end_keyframe_id,
+      ].filter(Boolean) as string[];
+      const byId = new Map<string, string>();
+      if (ids.length) {
+        const { data: kfs } = await supabase
           .from("scene_keyframes")
-          .select("image_url")
-          .eq("id", s.current_keyframe_id)
-          .single();
-        if (kf) {
-          keyframePath = kf.image_url;
-          keyframeUrl = await signedUrl(kf.image_url);
-        }
+          .select("id, image_url")
+          .in("id", ids);
+        for (const kf of kfs ?? []) byId.set(kf.id, kf.image_url);
       }
 
+      const startKfId = s.current_start_keyframe_id ?? s.current_keyframe_id ?? null;
+      const startKfPath = startKfId ? byId.get(startKfId) ?? null : null;
+      const startKfUrl = startKfPath ? await signedUrl(startKfPath) : null;
+
+      const endKfPath = s.current_end_keyframe_id
+        ? byId.get(s.current_end_keyframe_id) ?? null
+        : null;
+      const endKfUrl = endKfPath ? await signedUrl(endKfPath) : null;
+
+      // Surface jobs for either anchor generation or paired-frame derivation.
       const { data: latestJob } = await supabase
         .from("jobs")
-        .select("id, status, error")
-        .eq("type", "image_generate")
+        .select("id, status, error, type")
+        .in("type", ["image_generate", "derive_paired_frame"])
         .eq("project_id", projectId)
         .contains("request", { sceneId: s.id })
         .order("created_at", { ascending: false })
@@ -67,8 +78,9 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
 
       return {
         ...s,
-        keyframeUrl,
-        keyframePath,
+        startKeyframeUrl: startKfUrl,
+        endKeyframeUrl: endKfUrl,
+        keyframeUrl: startKfUrl, // back-compat alias for SINGLE-only consumers
         activeJob,
       };
     }),

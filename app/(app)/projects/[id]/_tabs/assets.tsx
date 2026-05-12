@@ -1,6 +1,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { signedUrl } from "@/lib/storage";
 import { AssetCard } from "./asset-card";
+import { AddAssetForm } from "./add-asset-form";
 
 const KIND_LABELS: Record<string, string> = {
   character: "Characters",
@@ -24,10 +25,13 @@ export async function AssetsTab({ projectId }: { projectId: string }) {
 
   if (!assets || assets.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-[var(--border)] p-12 text-center">
-        <p className="text-sm text-[var(--muted)]">
-          No assets yet. Characters, locations, and objects are extracted from your script during intake.
-        </p>
+      <div className="space-y-4">
+        <div className="rounded-lg border border-dashed border-[var(--border)] p-12 text-center">
+          <p className="text-sm text-[var(--muted)]">
+            No assets yet. Characters, locations, and objects are extracted from your script during intake — or add them manually below.
+          </p>
+        </div>
+        <AddAssetForm projectId={projectId} />
       </div>
     );
   }
@@ -97,6 +101,13 @@ export async function AssetsTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-8">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-xs text-[var(--muted)]">
+          Assets are reusable references for scene generation. Upload refs, confirm a variation, and any scene that names the asset (verbatim snake_case) will use it.
+        </p>
+        <AddAssetForm projectId={projectId} />
+      </div>
+
       {KIND_ORDER.filter((k) => grouped.has(k)).map((kind) => (
         <section key={kind} className="space-y-3">
           <h2 className="text-base font-medium">

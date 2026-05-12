@@ -152,6 +152,52 @@ export async function confirmVariation(
 }
 
 /**
+ * Manually add an asset to an existing project. Used when parse_script didn't extract
+ * something (or when the project predates the assets feature). Once created, the asset
+ * shows up on the Assets tab — upload refs and generate variations the same as any
+ * Claude-extracted asset. The next propose_storyboard run reads the full assets table
+ * fresh, so any added asset is automatically included in scene generation.
+ */
+export async function createAsset(
+  projectId: string,
+  input: {
+    name: string;
+    kind: "character" | "location" | "object";
+    role?: string;
+    base_description?: string;
+  },
+): Promise<Result<{ id: string }>> {
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false, error: "Not signed in" };
+
+  // Sanitize the name into snake_case so the keyframe matcher can find it.
+  const cleanName = input.name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!cleanName) return { ok: false, error: "Name required (will be saved as snake_case)." };
+
+  const { data: asset, error } = await supabase
+    .from("assets")
+    .insert({
+      project_id: projectId,
+      name: cleanName,
+      kind: input.kind,
+      role: input.role?.trim() || null,
+      base_description: input.base_description?.trim() || null,
+    })
+    .select("id")
+    .single();
+
+  if (error || !asset) return { ok: false, error: error?.message ?? "Failed to create asset" };
+
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, data: { id: asset.id } };
+}
+
+/**
  * Pre-register a confirmed asset (character / location / object) with Kling as a
  * Multi-Image Element so multi-shot videos can hold the asset's identity across cuts
  * via element_list. Async — the Inngest worker polls Kling for ~3 minutes until the

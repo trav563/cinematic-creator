@@ -24,6 +24,10 @@ export const generateAssetVariationFunction = inngest.createFunction(
     name: "Generate asset model-sheet variations",
     triggers: [{ event: "asset/generate_variation" }],
     retries: 1,
+    // Each asset run makes 3 parallel Gemini calls. Cap concurrent assets at 3
+    // so "Generate all" with 10+ assets can't fan out to 30+ concurrent Gemini
+    // calls + storage downloads, which previously overwhelmed Supabase connections.
+    concurrency: { limit: 3 },
   },
   async ({ event, step }) => {
     const data = event.data as GenerateAssetVariationEventData;

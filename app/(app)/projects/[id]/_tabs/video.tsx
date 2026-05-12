@@ -16,61 +16,102 @@ export async function VideoTab({ projectId }: { projectId: string }) {
     .order("scene_number");
 
   const scenesArr = scenes ?? [];
+  const sceneIds = scenesArr.map((s) => s.id);
+  const keyframeIds = scenesArr
+    .map((s) => s.current_keyframe_id)
+    .filter(Boolean) as string[];
 
-  const enrichedScenes = await Promise.all(
-    scenesArr.map(async (s) => {
-      let keyframeUrl: string | null = null;
-      if (s.current_keyframe_id) {
-        const { data: kf } = await supabase
+  // BATCHED: collapse N+1 queries into a constant number per page.
+  const [
+    { data: keyframes },
+    { data: videos },
+    { data: activeVideoJobs },
+    { data: latestPromptJob },
+  ] = await Promise.all([
+    keyframeIds.length > 0
+      ? supabase
           .from("scene_keyframes")
-          .select("image_url")
-          .eq("id", s.current_keyframe_id)
-          .single();
-        if (kf) keyframeUrl = await signedUrl(kf.image_url);
-      }
+          .select("id, image_url")
+          .in("id", keyframeIds)
+      : Promise.resolve({ data: [] as { id: string; image_url: string }[] }),
+    sceneIds.length > 0
+      ? supabase
+          .from("scene_videos")
+          .select("id, scene_id, video_url, duration_s, prompt_used, provider, created_at")
+          .in("scene_id", sceneIds)
+          .eq("is_current", true)
+      : Promise.resolve({
+          data: [] as {
+            id: string;
+            scene_id: string;
+            video_url: string;
+            duration_s: number | null;
+            prompt_used: string | null;
+            provider: string | null;
+            created_at: string;
+          }[],
+        }),
+    supabase
+      .from("jobs")
+      .select("id, status, error, request, created_at")
+      .eq("type", "video_generate")
+      .eq("project_id", projectId)
+      .in("status", ["queued", "running", "failed"])
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("jobs")
+      .select("id, status, error")
+      .eq("type", "generate_motion_prompts")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-      const { data: video } = await supabase
-        .from("scene_videos")
-        .select("id, video_url, duration_s, prompt_used, provider, created_at")
-        .eq("scene_id", s.id)
-        .eq("is_current", true)
-        .maybeSingle();
+  const keyframePathById = new Map<string, string>();
+  for (const kf of keyframes ?? []) keyframePathById.set(kf.id, kf.image_url);
 
-      let videoUrl: string | null = null;
-      if (video) {
-        videoUrl = await signedUrl(video.video_url);
-      }
+  type VideoRow = {
+    id: string;
+    scene_id: string;
+    video_url: string;
+    duration_s: number | null;
+    prompt_used: string | null;
+    provider: string | null;
+    created_at: string;
+  };
+  const videoBySceneId = new Map<string, VideoRow>();
+  for (const v of (videos ?? []) as VideoRow[]) videoBySceneId.set(v.scene_id, v);
 
-      const { data: latestJob } = await supabase
-        .from("jobs")
-        .select("id, status, error")
-        .eq("type", "video_generate")
-        .eq("project_id", projectId)
-        .contains("request", { sceneId: s.id })
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const activeJob = latestJob && latestJob.status !== "succeeded" ? latestJob : null;
+  const jobBySceneId = new Map<string, { id: string; status: string; error: string | null }>();
+  for (const j of activeVideoJobs ?? []) {
+    const req = j.request as { sceneId?: string } | null;
+    const sid = req?.sceneId;
+    if (!sid) continue;
+    if (!jobBySceneId.has(sid)) jobBySceneId.set(sid, { id: j.id, status: j.status, error: j.error });
+  }
 
-      return {
-        ...s,
-        keyframeUrl,
-        videoUrl,
-        videoMeta: video,
-        activeJob,
-      };
-    }),
-  );
+  // Sign every URL we need in one parallel batch
+  const allPaths = new Set<string>();
+  for (const path of keyframePathById.values()) allPaths.add(path);
+  for (const v of videos ?? []) allPaths.add(v.video_url);
+  const pathsArr = Array.from(allPaths);
+  const signedUrls = await Promise.all(pathsArr.map((p) => signedUrl(p)));
+  const urlByPath = new Map<string, string | null>();
+  pathsArr.forEach((p, i) => urlByPath.set(p, signedUrls[i]));
 
-  // Latest motion-prompt-generation job for this project. Only surface if not succeeded.
-  const { data: latestPromptJob } = await supabase
-    .from("jobs")
-    .select("id, status, error")
-    .eq("type", "generate_motion_prompts")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const enrichedScenes = scenesArr.map((s) => {
+    const kfPath = s.current_keyframe_id ? keyframePathById.get(s.current_keyframe_id) ?? null : null;
+    const video = videoBySceneId.get(s.id) ?? null;
+    return {
+      ...s,
+      keyframeUrl: kfPath ? urlByPath.get(kfPath) ?? null : null,
+      videoUrl: video ? urlByPath.get(video.video_url) ?? null : null,
+      videoMeta: video,
+      activeJob: jobBySceneId.get(s.id) ?? null,
+    };
+  });
+
   const activePromptJob =
     latestPromptJob && latestPromptJob.status !== "succeeded" ? latestPromptJob : null;
 

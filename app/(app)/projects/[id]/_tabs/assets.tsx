@@ -16,6 +16,7 @@ const KIND_ORDER = ["character", "location", "object"];
 export async function AssetsTab({ projectId }: { projectId: string }) {
   const supabase = await createSupabaseServerClient();
 
+  // Single bulk query for assets
   const { data: assets } = await supabase
     .from("assets")
     .select(
@@ -39,60 +40,94 @@ export async function AssetsTab({ projectId }: { projectId: string }) {
     );
   }
 
-  // For each asset, fetch all variations + the latest pending/running jobs
-  const enriched = await Promise.all(
-    assets.map(async (a) => {
-      const [{ data: variations }, { data: latestJob }, { data: latestBindJob }] = await Promise.all([
-        supabase
-          .from("asset_variations")
-          .select("id, image_url, prompt_used, created_at")
-          .eq("asset_id", a.id)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("jobs")
-          .select("id, status, error, request")
-          .eq("type", "image_generate")
-          .eq("project_id", projectId)
-          .contains("request", { assetId: a.id })
-          .in("status", ["queued", "running", "failed"])
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-        supabase
-          .from("jobs")
-          .select("id, status, error")
-          .eq("type", "kling_bind_element")
-          .eq("project_id", projectId)
-          .contains("request", { assetId: a.id })
-          .in("status", ["queued", "running", "failed"])
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ]);
+  // BATCHED queries — instead of N+1 (one per asset), do 3 total queries that pull
+  // everything we need, then group in JS. This was the slow page load: 20 assets ×
+  // 3 sequential queries = 60+ DB round-trips.
+  const assetIds = assets.map((a) => a.id);
+  const [
+    { data: allVariations },
+    { data: activeImageJobs },
+    { data: activeBindJobs },
+  ] = await Promise.all([
+    // All variations for any asset in this project
+    supabase
+      .from("asset_variations")
+      .select("id, asset_id, image_url, prompt_used, created_at")
+      .in("asset_id", assetIds)
+      .order("created_at", { ascending: false }),
+    // All image-generate jobs for this project that are queued/running/failed.
+    // We filter to assetId-bearing jobs in JS since contains() is per-row.
+    supabase
+      .from("jobs")
+      .select("id, status, error, request, created_at")
+      .eq("type", "image_generate")
+      .eq("project_id", projectId)
+      .in("status", ["queued", "running", "failed"])
+      .order("created_at", { ascending: false }),
+    // All Kling-bind jobs in queued/running/failed states
+    supabase
+      .from("jobs")
+      .select("id, status, error, request, created_at")
+      .eq("type", "kling_bind_element")
+      .eq("project_id", projectId)
+      .in("status", ["queued", "running", "failed"])
+      .order("created_at", { ascending: false }),
+  ]);
 
-      const refUrls = await Promise.all(
-        (a.reference_image_urls ?? []).map(async (path: string) => ({
-          path,
-          url: await signedUrl(path),
-        })),
-      );
-      const variationUrls = await Promise.all(
-        (variations ?? []).map(async (v) => ({
-          ...v,
-          signed_url: await signedUrl(v.image_url),
-        })),
-      );
+  // Group variations by asset_id
+  const variationsByAsset = new Map<string, typeof allVariations>();
+  for (const v of allVariations ?? []) {
+    if (!variationsByAsset.has(v.asset_id)) variationsByAsset.set(v.asset_id, []);
+    variationsByAsset.get(v.asset_id)!.push(v);
+  }
 
-      return {
-        ...a,
-        kind: (a.kind ?? "character") as "character" | "location" | "object",
-        refs: refUrls,
-        variations: variationUrls,
-        activeJob: latestJob ?? null,
-        activeBindJob: latestBindJob ?? null,
-      };
-    }),
-  );
+  // Group jobs by assetId (extracted from request jsonb). Take the most recent per asset.
+  function indexJobsByAsset(jobs: typeof activeImageJobs) {
+    const map = new Map<string, { id: string; status: string; error: string | null }>();
+    for (const j of jobs ?? []) {
+      const req = j.request as { assetId?: string } | null;
+      const aid = req?.assetId;
+      if (!aid) continue;
+      // jobs are pre-sorted desc by created_at, so first one wins
+      if (!map.has(aid)) map.set(aid, { id: j.id, status: j.status, error: j.error });
+    }
+    return map;
+  }
+  const imageJobByAsset = indexJobsByAsset(activeImageJobs);
+  const bindJobByAsset = indexJobsByAsset(activeBindJobs);
+
+  // Sign URLs in parallel — collect every path we need first, then dedupe + batch.
+  const allPaths = new Set<string>();
+  for (const a of assets) {
+    for (const p of (a.reference_image_urls ?? []) as string[]) allPaths.add(p);
+  }
+  for (const v of allVariations ?? []) allPaths.add(v.image_url);
+
+  const pathsArr = Array.from(allPaths);
+  const signedUrlPromises = pathsArr.map((p) => signedUrl(p));
+  const signedUrls = await Promise.all(signedUrlPromises);
+  const urlByPath = new Map<string, string | null>();
+  pathsArr.forEach((p, i) => urlByPath.set(p, signedUrls[i]));
+
+  // Stitch enriched rows together
+  const enriched = assets.map((a) => {
+    const refs = ((a.reference_image_urls ?? []) as string[]).map((path) => ({
+      path,
+      url: urlByPath.get(path) ?? null,
+    }));
+    const variations = (variationsByAsset.get(a.id) ?? []).map((v) => ({
+      ...v,
+      signed_url: urlByPath.get(v.image_url) ?? null,
+    }));
+    return {
+      ...a,
+      kind: (a.kind ?? "character") as "character" | "location" | "object",
+      refs,
+      variations,
+      activeJob: imageJobByAsset.get(a.id) ?? null,
+      activeBindJob: bindJobByAsset.get(a.id) ?? null,
+    };
+  });
 
   // Group by kind for display
   const grouped = new Map<string, typeof enriched>();

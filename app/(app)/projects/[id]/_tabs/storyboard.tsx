@@ -15,77 +15,91 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
     .eq("project_id", projectId)
     .order("scene_number");
 
-  // Find the most recent propose_storyboard job; only surface it in the UI if it
-  // didn't succeed (so an old failure stops being shown after a successful regen).
-  const { data: latestStoryboardJob } = await supabase
-    .from("jobs")
-    .select("id, status, error")
-    .eq("type", "propose_storyboard")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const scenesArr = scenes ?? [];
+
+  // BATCHED: collect every keyframe id we need, then fetch them in one IN-query.
+  const keyframeIds = new Set<string>();
+  for (const s of scenesArr) {
+    const startId = s.current_start_keyframe_id ?? s.current_keyframe_id;
+    if (startId) keyframeIds.add(startId);
+    if (s.current_end_keyframe_id) keyframeIds.add(s.current_end_keyframe_id);
+  }
+
+  const [
+    { data: latestStoryboardJob },
+    { data: keyframes },
+    { data: activeSceneJobs },
+  ] = await Promise.all([
+    supabase
+      .from("jobs")
+      .select("id, status, error")
+      .eq("type", "propose_storyboard")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    keyframeIds.size > 0
+      ? supabase
+          .from("scene_keyframes")
+          .select("id, image_url")
+          .in("id", Array.from(keyframeIds))
+      : Promise.resolve({ data: [] as { id: string; image_url: string }[] }),
+    // All active scene-related jobs in one query
+    supabase
+      .from("jobs")
+      .select("id, status, error, type, request, created_at")
+      .in("type", ["image_generate", "derive_paired_frame"])
+      .eq("project_id", projectId)
+      .in("status", ["queued", "running", "failed"])
+      .order("created_at", { ascending: false }),
+  ]);
+
   const storyboardJob =
     latestStoryboardJob && latestStoryboardJob.status !== "succeeded" ? latestStoryboardJob : null;
 
-  const scenesArr = scenes ?? [];
+  const pathById = new Map<string, string>();
+  for (const kf of keyframes ?? []) pathById.set(kf.id, kf.image_url);
 
-  // The stored "scenes" from parse_script were a rough outline (frame_role defaulted to
-  // "SINGLE", camera/beat empty). Detect whether propose_storyboard has been run.
+  // Index latest active job per scene
+  const jobBySceneId = new Map<string, { id: string; status: string; error: string | null; type: string }>();
+  for (const j of activeSceneJobs ?? []) {
+    const req = j.request as { sceneId?: string } | null;
+    const sid = req?.sceneId;
+    if (!sid) continue;
+    if (!jobBySceneId.has(sid)) {
+      jobBySceneId.set(sid, { id: j.id, status: j.status, error: j.error, type: j.type });
+    }
+  }
+
+  // Sign all unique keyframe paths in parallel (one round trip per signed URL,
+  // but they all fire concurrently rather than sequentially per scene).
+  const allPaths = new Set<string>();
+  for (const path of pathById.values()) allPaths.add(path);
+  const pathsArr = Array.from(allPaths);
+  const signedUrls = await Promise.all(pathsArr.map((p) => signedUrl(p)));
+  const urlByPath = new Map<string, string | null>();
+  pathsArr.forEach((p, i) => urlByPath.set(p, signedUrls[i]));
+
+  const enrichedScenes = scenesArr.map((s) => {
+    const startId = s.current_start_keyframe_id ?? s.current_keyframe_id;
+    const startPath = startId ? pathById.get(startId) ?? null : null;
+    const endPath = s.current_end_keyframe_id
+      ? pathById.get(s.current_end_keyframe_id) ?? null
+      : null;
+    return {
+      ...s,
+      startKeyframeUrl: startPath ? urlByPath.get(startPath) ?? null : null,
+      endKeyframeUrl: endPath ? urlByPath.get(endPath) ?? null : null,
+      keyframeUrl: startPath ? urlByPath.get(startPath) ?? null : null,
+      activeJob: jobBySceneId.get(s.id) ?? null,
+    };
+  });
+
+  // Detect whether propose_storyboard has been run (rough outline = no camera/beat).
   const hasRealStoryboard = scenesArr.some((s) => s.camera && s.beat);
-
   const totalScenes = scenesArr.length;
   const keyframedScenes = scenesArr.filter((s) => s.current_keyframe_id).length;
   const remainingScenes = totalScenes - keyframedScenes;
-
-  // For scenes with keyframes, fetch + sign the URLs. PAIR scenes have separate
-  // start/end frames; SINGLE scenes use current_keyframe_id (which we mirror onto
-  // start/end for backward compat).
-  const enrichedScenes = await Promise.all(
-    scenesArr.map(async (s) => {
-      const ids = [
-        s.current_start_keyframe_id ?? s.current_keyframe_id,
-        s.current_end_keyframe_id,
-      ].filter(Boolean) as string[];
-      const byId = new Map<string, string>();
-      if (ids.length) {
-        const { data: kfs } = await supabase
-          .from("scene_keyframes")
-          .select("id, image_url")
-          .in("id", ids);
-        for (const kf of kfs ?? []) byId.set(kf.id, kf.image_url);
-      }
-
-      const startKfId = s.current_start_keyframe_id ?? s.current_keyframe_id ?? null;
-      const startKfPath = startKfId ? byId.get(startKfId) ?? null : null;
-      const startKfUrl = startKfPath ? await signedUrl(startKfPath) : null;
-
-      const endKfPath = s.current_end_keyframe_id
-        ? byId.get(s.current_end_keyframe_id) ?? null
-        : null;
-      const endKfUrl = endKfPath ? await signedUrl(endKfPath) : null;
-
-      // Surface jobs for either anchor generation or paired-frame derivation.
-      const { data: latestJob } = await supabase
-        .from("jobs")
-        .select("id, status, error, type")
-        .in("type", ["image_generate", "derive_paired_frame"])
-        .eq("project_id", projectId)
-        .contains("request", { sceneId: s.id })
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const activeJob = latestJob && latestJob.status !== "succeeded" ? latestJob : null;
-
-      return {
-        ...s,
-        startKeyframeUrl: startKfUrl,
-        endKeyframeUrl: endKfUrl,
-        keyframeUrl: startKfUrl, // back-compat alias for SINGLE-only consumers
-        activeJob,
-      };
-    }),
-  );
 
   return (
     <div className="space-y-6">

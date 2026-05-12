@@ -15,6 +15,14 @@ const nextConfig: NextConfig = {
         ]
       : [],
   },
+  experimental: {
+    // Default is 1 MB. Character reference uploads (especially raw phone photos) and
+    // any future direct-to-action image upload routinely exceed this. Bump to 25 MB —
+    // matches Kling's per-image hard cap so we never over-promise to downstream APIs.
+    serverActions: {
+      bodySizeLimit: "25mb",
+    },
+  },
 };
 
 export default nextConfig;

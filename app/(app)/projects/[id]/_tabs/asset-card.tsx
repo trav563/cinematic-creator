@@ -61,36 +61,26 @@ export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; proj
   const lightboxVariation =
     lightboxIndex !== null ? asset.variations[lightboxIndex] ?? null : null;
 
-  // Watch for job completion. Two strategies in parallel for resilience:
-  //   (a) Supabase Realtime postgres_changes — instant, but requires the table to be in
-  //       the supabase_realtime publication (migration 0003) and replication can be flaky.
-  //   (b) Polling every 3s on router.refresh() — guaranteed to converge.
-  // The polling stops as soon as the activeJob clears (which happens after refresh because
-  // the server-side query only includes queued/running/failed jobs).
+  // Per-card Realtime sub keeps the local activeJob state fresh for instant pill updates.
+  // The page-level RealtimeJobsRefresher (mounted in assets.tsx) handles the
+  // router.refresh() so we don't fan out N refreshes when many jobs are active.
   const activeJobId = activeJob?.id ?? null;
   useEffect(() => {
     if (!activeJobId) return;
     const supabase = createSupabaseBrowserClient();
     const channel = supabase
-      .channel(`char-job-${activeJobId}`)
+      .channel(`asset-job-${activeJobId}`)
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "jobs", filter: `id=eq.${activeJobId}` },
         (payload) => {
           const next = payload.new as { status: string; error: string | null };
           setActiveJob({ id: activeJobId, status: next.status, error: next.error });
-          if (next.status === "succeeded" || next.status === "failed") {
-            router.refresh();
-          }
         },
       )
       .subscribe();
-
-    const interval = setInterval(() => router.refresh(), 3000);
-
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(interval);
     };
   }, [activeJobId, router]);
 
@@ -104,7 +94,8 @@ export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; proj
     setActiveBindJob(asset.activeBindJob);
   }, [asset.activeBindJob]);
 
-  // Watch the Kling-bind job in realtime as well.
+  // Same pattern for the Kling-bind job — Realtime keeps local state fresh; page-level
+  // refresher handles router.refresh.
   const activeBindJobId = activeBindJob?.id ?? null;
   useEffect(() => {
     if (!activeBindJobId) return;
@@ -117,16 +108,11 @@ export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; proj
         (payload) => {
           const next = payload.new as { status: string; error: string | null };
           setActiveBindJob({ id: activeBindJobId, status: next.status, error: next.error });
-          if (next.status === "succeeded" || next.status === "failed") {
-            router.refresh();
-          }
         },
       )
       .subscribe();
-    const interval = setInterval(() => router.refresh(), 5000);
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(interval);
     };
   }, [activeBindJobId, router]);
 

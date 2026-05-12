@@ -56,6 +56,8 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
     setActiveJob(scene.activeJob);
   }, [scene.activeJob]);
 
+  // Per-card Realtime keeps the local activeJob fresh; the page-level
+  // RealtimeJobsRefresher handles router.refresh() for the whole tab.
   const activeJobId = activeJob?.id ?? null;
   useEffect(() => {
     if (!activeJobId) return;
@@ -68,16 +70,11 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
         (payload) => {
           const next = payload.new as { status: string; error: string | null };
           setActiveJob({ id: activeJobId, status: next.status, error: next.error });
-          if (next.status === "succeeded" || next.status === "failed") {
-            router.refresh();
-          }
         },
       )
       .subscribe();
-    const interval = setInterval(() => router.refresh(), 3000);
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(interval);
     };
   }, [activeJobId, router]);
 

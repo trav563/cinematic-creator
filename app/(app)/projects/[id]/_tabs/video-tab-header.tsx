@@ -100,10 +100,8 @@ export function VideoTabHeader({
         },
       )
       .subscribe();
-    const interval = setInterval(() => router.refresh(), 3000);
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(interval);
     };
   }, [activeJobId, router]);
 

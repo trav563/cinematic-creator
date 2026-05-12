@@ -2,6 +2,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { signedUrl } from "@/lib/storage";
 import { VideoSceneCard } from "./video-scene-card";
 import { VideoTabHeader } from "./video-tab-header";
+import { RealtimeJobsRefresher } from "./realtime-jobs-refresher";
 
 export async function VideoTab({ projectId }: { projectId: string }) {
   const supabase = await createSupabaseServerClient();
@@ -90,6 +91,7 @@ export async function VideoTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-6">
+      <RealtimeJobsRefresher projectId={projectId} />
       <VideoTabHeader
         projectId={projectId}
         totalScenes={totalScenes}

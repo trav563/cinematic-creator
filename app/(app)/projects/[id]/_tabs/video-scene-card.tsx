@@ -126,6 +126,8 @@ export function VideoSceneCard({ scene, projectId: _projectId }: { scene: Scene;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, mode]);
 
+  // Per-card Realtime keeps the local activeJob state fresh; the page-level
+  // RealtimeJobsRefresher (mounted in video.tsx) handles router.refresh() centrally.
   const activeJobId = activeJob?.id ?? null;
   useEffect(() => {
     if (!activeJobId) return;
@@ -138,16 +140,11 @@ export function VideoSceneCard({ scene, projectId: _projectId }: { scene: Scene;
         (payload) => {
           const next = payload.new as { status: string; error: string | null };
           setActiveJob({ id: activeJobId, status: next.status, error: next.error });
-          if (next.status === "succeeded" || next.status === "failed") {
-            router.refresh();
-          }
         },
       )
       .subscribe();
-    const interval = setInterval(() => router.refresh(), 10000);
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(interval);
     };
   }, [activeJobId, router]);
 

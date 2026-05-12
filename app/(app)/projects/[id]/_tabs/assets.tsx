@@ -3,6 +3,7 @@ import { signedUrl } from "@/lib/storage";
 import { AssetCard } from "./asset-card";
 import { AddAssetForm } from "./add-asset-form";
 import { AssetsHeader } from "./assets-header";
+import { RealtimeJobsRefresher } from "./realtime-jobs-refresher";
 
 const KIND_LABELS: Record<string, string> = {
   character: "Characters",
@@ -27,6 +28,7 @@ export async function AssetsTab({ projectId }: { projectId: string }) {
   if (!assets || assets.length === 0) {
     return (
       <div className="space-y-4">
+        <RealtimeJobsRefresher projectId={projectId} />
         <div className="rounded-lg border border-dashed border-[var(--border)] p-12 text-center">
           <p className="text-sm text-[var(--muted)]">
             No assets yet. Characters, locations, and objects are extracted from your script during intake — or add them manually below.
@@ -110,6 +112,7 @@ export async function AssetsTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-8">
+      <RealtimeJobsRefresher projectId={projectId} />
       <AssetsHeader
         projectId={projectId}
         totalAssets={totalAssets}

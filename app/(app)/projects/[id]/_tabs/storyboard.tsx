@@ -2,6 +2,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { signedUrl } from "@/lib/storage";
 import { StoryboardHeader } from "./storyboard-header";
 import { SceneCard } from "./scene-card";
+import { RealtimeJobsRefresher } from "./realtime-jobs-refresher";
 
 export async function StoryboardTab({ projectId }: { projectId: string }) {
   const supabase = await createSupabaseServerClient();
@@ -88,6 +89,7 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-6">
+      <RealtimeJobsRefresher projectId={projectId} />
       <StoryboardHeader
         projectId={projectId}
         hasRealStoryboard={hasRealStoryboard}

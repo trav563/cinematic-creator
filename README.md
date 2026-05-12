@@ -1,36 +1,117 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cinematic Creator Tool
 
-## Getting Started
+PAI-style cinematic video planning + generation app. Upload a script → review derived
+brief → generate characters → lay out a storyboard → edit keyframes (with masking) →
+generate per-scene video clips. Multi-device, BYO API keys, no audio (handled in your
+video editor).
 
-First, run the development server:
+See `/Users/travisames/.claude/plans/wiggly-hopping-yao.md` for the full plan and
+phased build order.
+
+## Phase 0 — first-time setup
+
+These are manual, one-time steps that need your accounts.
+
+### 1. Create a Supabase project
+
+1. Go to https://supabase.com → **New project**.
+2. Region: closest to you. Save the database password somewhere safe.
+3. Once provisioned, open **Project Settings → API** and copy:
+   - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
+   - `anon public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `service_role` key → `SUPABASE_SERVICE_ROLE_KEY`
+
+### 2. Apply the schema
+
+In the Supabase Dashboard → **SQL Editor** → paste the contents of
+`supabase/migrations/0001_init.sql` and run. This creates all tables, indexes, RLS
+policies, and triggers.
+
+### 3. Create the storage bucket
+
+In Supabase Dashboard → **Storage** → **New bucket**:
+- Name: `project-assets`
+- Public: **No** (private)
+
+### 4. Configure auth
+
+Supabase Dashboard → **Authentication → URL Configuration**:
+- Site URL: `http://localhost:3000` for local; your Vercel URL for production.
+- Redirect URLs: add `http://localhost:3000/auth/callback` and the production equivalent.
+
+### 5. Create an Inngest account
+
+1. Go to https://inngest.com → sign up (free tier is fine).
+2. Create an app → copy the **Event Key** and **Signing Key**.
+
+### 6. Generate the credentials encryption key
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Save the output as `CREDENTIALS_ENCRYPTION_KEY` in `.env.local`. **Do not lose it** —
+without it, encrypted API keys in `provider_credentials` cannot be decrypted.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 7. Create `.env.local`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Copy `.env.local.example` → `.env.local` and fill in everything from steps 1, 5, and 6.
 
-## Learn More
+### 8. Run locally
 
-To learn more about Next.js, take a look at the following resources:
+In two terminals:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+# terminal 1 — Next.js
+npm run dev
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# terminal 2 — Inngest dev server
+npx inngest-cli@latest dev -u http://localhost:3000/api/inngest
+```
 
-## Deploy on Vercel
+Visit http://localhost:3000 → sign in with magic link → land on Projects dashboard.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 9. Add your AI provider keys
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Settings → API Keys. Paste your Anthropic, Google AI Studio, and Kling keys. They're
+encrypted with AES-256-GCM before being stored.
+
+## Deploy to Vercel
+
+1. Push this repo to GitHub.
+2. https://vercel.com/new → import the repo.
+3. Add all env vars from your `.env.local` to the Vercel project settings.
+4. Set `NEXT_PUBLIC_SITE_URL` to your Vercel URL.
+5. Update Supabase Auth redirect URLs to include the Vercel URL.
+6. Connect Inngest to Vercel (https://www.inngest.com/docs/deploy/vercel).
+
+## Architecture
+
+- **Next.js 16** (App Router) on Vercel
+- **Supabase** (Postgres + Storage + Auth + Realtime)
+- **Inngest** for background jobs (image gen, video gen)
+- **Anthropic Claude** Opus 4.7 (creative actions) + Sonnet 4.6 (routine)
+- **Google AI Studio** — `gemini-3-pro-image` ONLY (Nano Banana Pro)
+- **Kling** 2.6 + 3.0 multi-shot for video
+
+No global chat. All AI actions are per-asset RPC.
+
+## Project layout
+
+```
+app/                   # routes (App Router)
+  (auth)/login         # magic-link login
+  (auth)/auth/callback # supabase OAuth code exchange
+  (app)/               # auth-guarded shell + nav
+    page.tsx           # projects dashboard
+    settings/keys      # BYO key management
+  api/inngest          # Inngest webhook
+components/            # UI building blocks
+lib/
+  supabase/            # server, client, proxy, service
+  crypto/keys.ts       # AES-256-GCM for stored API keys
+  inngest/             # job client + functions
+  env.ts               # required env helpers
+supabase/migrations/   # SQL migrations (apply manually in dashboard)
+proxy.ts               # session refresh on every request
+```

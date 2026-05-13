@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   generateVideo,
@@ -391,13 +392,15 @@ export function VideoSceneCard({ scene, projectId: _projectId }: { scene: Scene;
                   </button>
                 </div>
               </div>
-              <Input
+              <Textarea
                 id={`prompt-${scene.id}`}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onBlur={handlePromptBlur}
                 placeholder="Auto-generate from the header, or write one: 'slow push-in, sword catches sunlight, cape ripples in wind'"
                 disabled={isGenerating || !scene.keyframeUrl}
+                rows={6}
+                className="resize-y leading-relaxed"
               />
             </div>
           )}

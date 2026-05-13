@@ -50,7 +50,7 @@ export const derivePairedFrameFunction = inngest.createFunction(
       const { data: scene } = await supabase
         .from("scenes")
         .select(
-          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, current_start_keyframe_id, current_end_keyframe_id",
+          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, referenced_asset_ids, current_start_keyframe_id, current_end_keyframe_id",
         )
         .eq("id", data.sceneId)
         .single();
@@ -84,16 +84,21 @@ export const derivePairedFrameFunction = inngest.createFunction(
       if (!anchorKf) throw new Error("Anchor keyframe not found in storage");
 
       // Asset name list for the edit-instruction composer (so it can name them).
+      // Union the auto-matched names with explicitly attached asset ids.
       const { data: assets } = await supabase
         .from("assets")
-        .select("name")
+        .select("id, name")
         .eq("project_id", data.projectId);
-      const allAssetNames = (assets ?? []).map((a) => a.name);
+      const allAssets = (assets ?? []) as { id: string; name: string }[];
       const desc = scene.description.toLowerCase();
-      const referencedNames = allAssetNames.filter((name) => {
-        const re = new RegExp(`(?:^|[^a-z0-9])${name.toLowerCase()}(?:[^a-z0-9]|$)`, "i");
-        return re.test(desc);
-      });
+      const explicitIds = new Set(((scene.referenced_asset_ids ?? []) as string[]));
+      const referencedNames = allAssets
+        .filter((a) => {
+          if (explicitIds.has(a.id)) return true;
+          const re = new RegExp(`(?:^|[^a-z0-9])${a.name.toLowerCase()}(?:[^a-z0-9]|$)`, "i");
+          return re.test(desc);
+        })
+        .map((a) => a.name);
 
       return {
         scene,

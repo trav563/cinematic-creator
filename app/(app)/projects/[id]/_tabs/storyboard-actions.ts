@@ -51,6 +51,56 @@ export async function uploadSceneReference(
   return { ok: true, data: { paths: uploadedPaths } };
 }
 
+export async function attachAssetToScene(
+  sceneId: string,
+  assetId: string,
+): Promise<Result> {
+  const supabase = await createSupabaseServerClient();
+  const { data: scene } = await supabase
+    .from("scenes")
+    .select("id, project_id, referenced_asset_ids")
+    .eq("id", sceneId)
+    .single();
+  if (!scene) return { ok: false, error: "Scene not found" };
+
+  const current = (scene.referenced_asset_ids ?? []) as string[];
+  if (current.includes(assetId)) return { ok: true };
+
+  const { error } = await supabase
+    .from("scenes")
+    .update({ referenced_asset_ids: [...current, assetId] })
+    .eq("id", sceneId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true };
+}
+
+export async function detachAssetFromScene(
+  sceneId: string,
+  assetId: string,
+): Promise<Result> {
+  const supabase = await createSupabaseServerClient();
+  const { data: scene } = await supabase
+    .from("scenes")
+    .select("id, project_id, referenced_asset_ids")
+    .eq("id", sceneId)
+    .single();
+  if (!scene) return { ok: false, error: "Scene not found" };
+
+  const remaining = ((scene.referenced_asset_ids ?? []) as string[]).filter(
+    (id) => id !== assetId,
+  );
+  const { error } = await supabase
+    .from("scenes")
+    .update({ referenced_asset_ids: remaining })
+    .eq("id", sceneId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true };
+}
+
 export async function removeSceneReference(
   sceneId: string,
   refPath: string,

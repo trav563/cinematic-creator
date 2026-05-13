@@ -15,6 +15,8 @@ import {
   derivePairedFrame,
   uploadSceneReference,
   removeSceneReference,
+  attachAssetToScene,
+  detachAssetFromScene,
 } from "./storyboard-actions";
 
 interface ActiveJob {
@@ -26,6 +28,13 @@ interface ActiveJob {
 interface SceneRef {
   path: string;
   url: string | null;
+}
+
+interface ProjectAsset {
+  id: string;
+  name: string;
+  kind: string | null;
+  role: string | null;
 }
 
 interface Scene {
@@ -45,6 +54,9 @@ interface Scene {
   /** Back-compat alias for SINGLE-only consumers */
   keyframeUrl: string | null;
   refs: SceneRef[];
+  attachedAssetIds: string[];
+  startPrompt: string | null;
+  endPrompt: string | null;
   activeJob: ActiveJob | null;
 }
 
@@ -55,16 +67,44 @@ const FRAME_ROLE_COLORS: Record<string, string> = {
   "PAIR-END": "bg-pink-500/15 text-pink-300",
 };
 
-export function SceneCard({ scene, projectId }: { scene: Scene; projectId: string }) {
+export function SceneCard({
+  scene,
+  projectId,
+  projectAssets,
+}: {
+  scene: Scene;
+  projectId: string;
+  projectAssets: ProjectAsset[];
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [editInstruction, setEditInstruction] = useState("");
   const [showEdit, setShowEdit] = useState(false);
   const [showRefs, setShowRefs] = useState(false);
+  const [showAssets, setShowAssets] = useState(false);
+  const [showPrompt, setShowPrompt] = useState<"start" | "end" | null>(null);
+  const [assetPickerValue, setAssetPickerValue] = useState("");
   const [lightboxFrame, setLightboxFrame] = useState<"start" | "end" | null>(null);
   const [lightboxRef, setLightboxRef] = useState<SceneRef | null>(null);
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(scene.activeJob);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-detect which asset names appear in the description (matches the worker's regex).
+  const matchedAssetIds = new Set<string>();
+  const desc = scene.description.toLowerCase();
+  for (const a of projectAssets) {
+    const re = new RegExp(`(?:^|[^a-z0-9])${a.name.toLowerCase()}(?:[^a-z0-9]|$)`, "i");
+    if (re.test(desc)) matchedAssetIds.add(a.id);
+  }
+  const explicitlyAttached = projectAssets.filter((a) =>
+    scene.attachedAssetIds.includes(a.id),
+  );
+  const autoMatched = projectAssets.filter(
+    (a) => matchedAssetIds.has(a.id) && !scene.attachedAssetIds.includes(a.id),
+  );
+  const availableToAttach = projectAssets.filter(
+    (a) => !scene.attachedAssetIds.includes(a.id) && !matchedAssetIds.has(a.id),
+  );
 
   useEffect(() => {
     setActiveJob(scene.activeJob);
@@ -137,6 +177,31 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
       const result = await removeSceneReference(scene.id, path);
       if (!result.ok) toast.error(result.error);
     });
+  }
+
+  function handleAttachAsset(assetId: string) {
+    if (!assetId) return;
+    startTransition(async () => {
+      const result = await attachAssetToScene(scene.id, assetId);
+      if (!result.ok) toast.error(result.error);
+      setAssetPickerValue("");
+    });
+  }
+
+  function handleDetachAsset(assetId: string) {
+    startTransition(async () => {
+      const result = await detachAssetFromScene(scene.id, assetId);
+      if (!result.ok) toast.error(result.error);
+    });
+  }
+
+  async function copyPrompt(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Prompt copied to clipboard");
+    } catch {
+      toast.error("Couldn't copy — select the text manually");
+    }
   }
 
   function handleDerivePaired() {
@@ -256,7 +321,7 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
           <p className="text-xs text-red-400">Failed: {activeJob.error ?? "unknown error"}</p>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1">
           <button
             type="button"
             onClick={() => setShowRefs((v) => !v)}
@@ -268,6 +333,27 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
                 ? "+ Add scene reference ▴"
                 : "+ Add scene reference"}
           </button>
+          <button
+            type="button"
+            onClick={() => setShowAssets((v) => !v)}
+            className="text-xs text-[var(--muted)] underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Assets ({explicitlyAttached.length + autoMatched.length})
+            {showAssets ? " ▴" : " ▾"}
+          </button>
+          {(scene.startPrompt || scene.endPrompt) && (
+            <button
+              type="button"
+              onClick={() =>
+                setShowPrompt((cur) =>
+                  cur ? null : scene.endPrompt && !scene.startPrompt ? "end" : "start",
+                )
+              }
+              className="text-xs text-[var(--muted)] underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {showPrompt ? "Hide prompt ▴" : "View prompt ▾"}
+            </button>
+          )}
         </div>
 
         {showRefs && (
@@ -322,6 +408,131 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
                 />
               </label>
             </div>
+          </div>
+        )}
+
+        {showAssets && (
+          <div className="space-y-2 rounded border border-dashed border-[var(--border)] p-2">
+            <p className="text-[11px] text-[var(--muted)]">
+              Assets attached to this scene. Auto-matched ones come from snake_case names in the
+              description; explicitly-added ones get included even if they aren't named.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {autoMatched.map((a) => (
+                <span
+                  key={a.id}
+                  className="rounded bg-[var(--surface-2)] px-2 py-0.5 text-[11px] text-[var(--muted)]"
+                  title="Auto-matched from the scene description"
+                >
+                  {a.name} <span className="opacity-60">· auto</span>
+                </span>
+              ))}
+              {explicitlyAttached.map((a) => (
+                <span
+                  key={a.id}
+                  className="group inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-300"
+                >
+                  {a.name}
+                  <button
+                    type="button"
+                    onClick={() => handleDetachAsset(a.id)}
+                    disabled={isPending}
+                    className="text-amber-400 opacity-0 transition-opacity hover:text-white group-hover:opacity-100"
+                    aria-label={`Detach ${a.name}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+              {autoMatched.length + explicitlyAttached.length === 0 && (
+                <span className="text-[11px] text-[var(--muted)]">No assets attached.</span>
+              )}
+            </div>
+            {availableToAttach.length > 0 && (
+              <div className="flex items-center gap-2 pt-1">
+                <select
+                  value={assetPickerValue}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setAssetPickerValue(v);
+                    if (v) handleAttachAsset(v);
+                  }}
+                  disabled={isPending}
+                  className="flex-1 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
+                >
+                  <option value="">+ Attach asset…</option>
+                  {availableToAttach.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                      {a.kind ? ` (${a.kind})` : ""}
+                      {a.role ? ` — ${a.role}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {projectAssets.length === 0 && (
+              <p className="text-[11px] text-[var(--muted)]">
+                No assets in this project yet — add some from the Assets tab.
+              </p>
+            )}
+          </div>
+        )}
+
+        {showPrompt && (
+          <div className="space-y-2 rounded border border-dashed border-[var(--border)] p-2">
+            {isPair && scene.startPrompt && scene.endPrompt && (
+              <div className="flex gap-1 rounded border border-[var(--border)] p-0.5 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setShowPrompt("start")}
+                  className={`flex-1 rounded px-2 py-1 ${
+                    showPrompt === "start"
+                      ? "bg-[var(--surface-2)] text-foreground"
+                      : "text-[var(--muted)] hover:text-foreground"
+                  }`}
+                >
+                  Start frame
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPrompt("end")}
+                  className={`flex-1 rounded px-2 py-1 ${
+                    showPrompt === "end"
+                      ? "bg-[var(--surface-2)] text-foreground"
+                      : "text-[var(--muted)] hover:text-foreground"
+                  }`}
+                >
+                  End frame
+                </button>
+              </div>
+            )}
+            <p className="text-[11px] text-[var(--muted)]">
+              Read-only — to change the prompt, edit the scene description / attached assets / refs
+              and regenerate.
+            </p>
+            <textarea
+              readOnly
+              value={
+                (showPrompt === "end" ? scene.endPrompt : scene.startPrompt) ??
+                "(no prompt recorded)"
+              }
+              rows={10}
+              className="w-full resize-y rounded border border-[var(--border)] bg-[var(--surface-2)] p-2 font-mono text-[11px] leading-relaxed text-foreground"
+              onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+            />
+            <Button
+              variant="secondary"
+              onClick={() =>
+                copyPrompt(
+                  (showPrompt === "end" ? scene.endPrompt : scene.startPrompt) ?? "",
+                )
+              }
+              className="text-xs"
+              disabled={!(showPrompt === "end" ? scene.endPrompt : scene.startPrompt)}
+            >
+              Copy prompt
+            </Button>
           </div>
         )}
 

@@ -43,7 +43,7 @@ export const generateKeyframeFunction = inngest.createFunction(
       const { data: scene } = await supabase
         .from("scenes")
         .select(
-          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, reference_image_urls",
+          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, reference_image_urls, referenced_asset_ids",
         )
         .eq("id", data.sceneId)
         .single();
@@ -79,6 +79,7 @@ export const generateKeyframeFunction = inngest.createFunction(
       }
 
       const allAssetsForMatching = (allAssets ?? []).map((a) => ({
+        id: a.id,
         name: a.name,
         kind: (a.kind ?? null) as "character" | "location" | "object" | null,
         role: a.role,
@@ -95,7 +96,11 @@ export const generateKeyframeFunction = inngest.createFunction(
     // Word-boundary regex with [^a-z0-9] so underscores separate (JS's \b counts _ as
     // a word char, which would miss inside "link_ordon").
     const desc = ctx.scene.description.toLowerCase();
+    const explicitIds = new Set(((ctx.scene.referenced_asset_ids ?? []) as string[]));
     const matchedAssets = ctx.allAssetsForMatching.filter((a) => {
+      // Explicit attachments always count, regardless of whether the name appears in
+      // the description.
+      if (explicitIds.has(a.id)) return true;
       const fullName = a.name.toLowerCase();
       return new RegExp(`(?:^|[^a-z0-9])${fullName}(?:[^a-z0-9]|$)`, "i").test(desc);
     });

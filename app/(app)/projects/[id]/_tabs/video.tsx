@@ -10,16 +10,19 @@ export async function VideoTab({ projectId }: { projectId: string }) {
   const { data: scenes } = await supabase
     .from("scenes")
     .select(
-      "id, scene_number, act, beat, camera, frame_role, description, current_keyframe_id, motion_prompt",
+      "id, scene_number, act, beat, camera, frame_role, pair_anchor, description, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id, motion_prompt",
     )
     .eq("project_id", projectId)
     .order("scene_number");
 
   const scenesArr = scenes ?? [];
   const sceneIds = scenesArr.map((s) => s.id);
-  const keyframeIds = scenesArr
-    .map((s) => s.current_keyframe_id)
-    .filter(Boolean) as string[];
+  const keyframeIds = new Set<string>();
+  for (const s of scenesArr) {
+    if (s.current_keyframe_id) keyframeIds.add(s.current_keyframe_id);
+    if (s.current_start_keyframe_id) keyframeIds.add(s.current_start_keyframe_id);
+    if (s.current_end_keyframe_id) keyframeIds.add(s.current_end_keyframe_id);
+  }
 
   // BATCHED: collapse N+1 queries into a constant number per page.
   const [
@@ -28,11 +31,11 @@ export async function VideoTab({ projectId }: { projectId: string }) {
     { data: activeVideoJobs },
     { data: latestPromptJob },
   ] = await Promise.all([
-    keyframeIds.length > 0
+    keyframeIds.size > 0
       ? supabase
           .from("scene_keyframes")
           .select("id, image_url")
-          .in("id", keyframeIds)
+          .in("id", Array.from(keyframeIds))
       : Promise.resolve({ data: [] as { id: string; image_url: string }[] }),
     sceneIds.length > 0
       ? supabase
@@ -102,10 +105,18 @@ export async function VideoTab({ projectId }: { projectId: string }) {
 
   const enrichedScenes = scenesArr.map((s) => {
     const kfPath = s.current_keyframe_id ? keyframePathById.get(s.current_keyframe_id) ?? null : null;
+    const startKfPath = s.current_start_keyframe_id
+      ? keyframePathById.get(s.current_start_keyframe_id) ?? null
+      : null;
+    const endKfPath = s.current_end_keyframe_id
+      ? keyframePathById.get(s.current_end_keyframe_id) ?? null
+      : null;
     const video = videoBySceneId.get(s.id) ?? null;
     return {
       ...s,
       keyframeUrl: kfPath ? urlByPath.get(kfPath) ?? null : null,
+      startKeyframeUrl: startKfPath ? urlByPath.get(startKfPath) ?? null : null,
+      endKeyframeUrl: endKfPath ? urlByPath.get(endKfPath) ?? null : null,
       videoUrl: video ? urlByPath.get(video.video_url) ?? null : null,
       videoMeta: video,
       activeJob: jobBySceneId.get(s.id) ?? null,

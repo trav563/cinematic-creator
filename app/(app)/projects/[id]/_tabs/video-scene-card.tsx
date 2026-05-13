@@ -41,8 +41,11 @@ interface Scene {
   description: string;
   camera: string | null;
   frame_role: string;
+  pair_anchor: string | null;
   motion_prompt: string | null;
   keyframeUrl: string | null;
+  startKeyframeUrl: string | null;
+  endKeyframeUrl: string | null;
   videoUrl: string | null;
   videoMeta: VideoMeta | null;
   activeJob: ActiveJob | null;
@@ -230,40 +233,103 @@ export function VideoSceneCard({ scene, projectId: _projectId }: { scene: Scene;
 
   return (
     <div className="flex flex-col rounded-lg border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
-      <div className="relative aspect-video w-full bg-[var(--surface-2)]">
-        {scene.videoUrl ? (
-          <video
-            src={scene.videoUrl}
-            controls
-            className="h-full w-full object-cover"
-            poster={scene.keyframeUrl ?? undefined}
-          />
-        ) : scene.keyframeUrl ? (
-          <Image
-            src={scene.keyframeUrl}
-            alt={`Scene ${scene.scene_number}`}
-            fill
-            sizes="500px"
-            className="object-cover"
-            unoptimized
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-xs text-[var(--muted)]">
-            No keyframe
-          </div>
-        )}
-        <span className="absolute left-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
-          #{scene.scene_number}
-        </span>
-        {isGenerating && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className="flex items-center gap-2 rounded-full bg-black/80 px-3 py-1.5 text-xs font-medium text-white">
-              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-              {activeJob?.status === "running" ? "Generating video…" : "Queued…"}
+      {(() => {
+        const isPair =
+          scene.frame_role === "PAIR" && scene.startKeyframeUrl && scene.endKeyframeUrl;
+        // Once a video exists, swap it in for both PAIR and SINGLE — the video IS the
+        // interpolation of the two frames.
+        if (scene.videoUrl) {
+          return (
+            <div className="relative aspect-video w-full bg-[var(--surface-2)]">
+              <video
+                src={scene.videoUrl}
+                controls
+                className="h-full w-full object-cover"
+                poster={scene.keyframeUrl ?? scene.startKeyframeUrl ?? undefined}
+              />
+              <span className="absolute left-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
+                #{scene.scene_number}
+              </span>
             </div>
+          );
+        }
+        if (isPair) {
+          return (
+            <div className="relative grid grid-cols-2 gap-px bg-[var(--border)]">
+              <div className="relative aspect-video w-full bg-[var(--surface-2)]">
+                <Image
+                  src={scene.startKeyframeUrl!}
+                  alt={`Scene ${scene.scene_number} start`}
+                  fill
+                  sizes="250px"
+                  className="object-cover"
+                  unoptimized
+                />
+                <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white">
+                  {scene.pair_anchor === "start" ? "★ Start (anchor)" : "Start (derived)"}
+                </span>
+              </div>
+              <div className="relative aspect-video w-full bg-[var(--surface-2)]">
+                <Image
+                  src={scene.endKeyframeUrl!}
+                  alt={`Scene ${scene.scene_number} end`}
+                  fill
+                  sizes="250px"
+                  className="object-cover"
+                  unoptimized
+                />
+                <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white">
+                  {scene.pair_anchor === "end" ? "★ End (anchor)" : "End (derived)"}
+                </span>
+              </div>
+              <span className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
+                #{scene.scene_number}
+              </span>
+              <span className="pointer-events-none absolute right-2 top-2 z-10 rounded bg-violet-500/30 px-1.5 py-0.5 text-xs font-medium text-violet-100">
+                PAIR
+              </span>
+              {isGenerating && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                  <div className="flex items-center gap-2 rounded-full bg-black/80 px-3 py-1.5 text-xs font-medium text-white">
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                    {activeJob?.status === "running" ? "Generating video…" : "Queued…"}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }
+        // SINGLE
+        return (
+          <div className="relative aspect-video w-full bg-[var(--surface-2)]">
+            {scene.keyframeUrl ? (
+              <Image
+                src={scene.keyframeUrl}
+                alt={`Scene ${scene.scene_number}`}
+                fill
+                sizes="500px"
+                className="object-cover"
+                unoptimized
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-xs text-[var(--muted)]">
+                No keyframe
+              </div>
+            )}
+            <span className="absolute left-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white">
+              #{scene.scene_number}
+            </span>
+            {isGenerating && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                <div className="flex items-center gap-2 rounded-full bg-black/80 px-3 py-1.5 text-xs font-medium text-white">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                  {activeJob?.status === "running" ? "Generating video…" : "Queued…"}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       <div className="flex flex-1 flex-col gap-3 p-3">
         <p className="text-sm text-foreground">{scene.description}</p>

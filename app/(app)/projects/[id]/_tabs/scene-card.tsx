@@ -18,6 +18,7 @@ import {
   attachAssetToScene,
   detachAssetFromScene,
   saveScenePromptOverride,
+  saveDerivedFramePromptOverride,
 } from "./storyboard-actions";
 
 interface ActiveJob {
@@ -59,6 +60,7 @@ interface Scene {
   startPrompt: string | null;
   endPrompt: string | null;
   keyframe_prompt_override: string | null;
+  derived_frame_prompt_override: string | null;
   activeJob: ActiveJob | null;
 }
 
@@ -86,18 +88,28 @@ export function SceneCard({
   const [showAssets, setShowAssets] = useState(false);
   const [showPrompt, setShowPrompt] = useState<"start" | "end" | null>(null);
   const [assetPickerValue, setAssetPickerValue] = useState("");
-  // Editable prompt draft. Initialized from the override if set, else from the
-  // last-used auto-generated prompt so the user has something to edit.
-  const initialPromptDraft =
-    scene.keyframe_prompt_override ?? scene.startPrompt ?? scene.endPrompt ?? "";
-  const [promptDraft, setPromptDraft] = useState(initialPromptDraft);
-  // Sync the draft when the scene's saved override changes (e.g. after Save +
-  // server revalidation, or when the user resets).
+  // For PAIR scenes the anchor side and derived side each have their own override
+  // and own last-used prompt. We track separate drafts so editing one doesn't
+  // clobber the other. For SINGLE scenes only the anchor draft is used.
+  const anchorPrompt = scene.startPrompt ?? scene.endPrompt ?? "";
+  const derivedPromptValue =
+    scene.frame_role === "PAIR" && scene.pair_anchor === "start"
+      ? scene.endPrompt ?? ""
+      : scene.frame_role === "PAIR" && scene.pair_anchor === "end"
+        ? scene.startPrompt ?? ""
+        : "";
+  const [anchorDraft, setAnchorDraft] = useState(
+    scene.keyframe_prompt_override ?? anchorPrompt,
+  );
+  const [derivedDraft, setDerivedDraft] = useState(
+    scene.derived_frame_prompt_override ?? derivedPromptValue,
+  );
   useEffect(() => {
-    setPromptDraft(
-      scene.keyframe_prompt_override ?? scene.startPrompt ?? scene.endPrompt ?? "",
-    );
-  }, [scene.keyframe_prompt_override, scene.startPrompt, scene.endPrompt]);
+    setAnchorDraft(scene.keyframe_prompt_override ?? anchorPrompt);
+  }, [scene.keyframe_prompt_override, anchorPrompt]);
+  useEffect(() => {
+    setDerivedDraft(scene.derived_frame_prompt_override ?? derivedPromptValue);
+  }, [scene.derived_frame_prompt_override, derivedPromptValue]);
   const [lightboxFrame, setLightboxFrame] = useState<"start" | "end" | null>(null);
   const [lightboxRef, setLightboxRef] = useState<SceneRef | null>(null);
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(scene.activeJob);
@@ -218,24 +230,46 @@ export function SceneCard({
     }
   }
 
-  function handleSavePromptOverride() {
+  function handleSaveAnchorOverride() {
     startTransition(async () => {
-      const result = await saveScenePromptOverride(scene.id, promptDraft);
+      const result = await saveScenePromptOverride(scene.id, anchorDraft);
       if (!result.ok) toast.error(result.error);
       else
         toast.success(
-          "Prompt override saved. The next regenerate uses it verbatim, and motion-prompt generation sees it as scene context.",
+          "Anchor prompt override saved. Next regenerate uses it verbatim; motion-prompt generation sees it as scene context.",
         );
     });
   }
 
-  function handleResetPromptOverride() {
+  function handleResetAnchorOverride() {
     startTransition(async () => {
       const result = await saveScenePromptOverride(scene.id, null);
       if (!result.ok) toast.error(result.error);
       else
         toast.success(
-          "Override cleared — next regenerate rebuilds the prompt from scene + preset.",
+          "Anchor override cleared — next regenerate rebuilds from scene + preset.",
+        );
+    });
+  }
+
+  function handleSaveDerivedOverride() {
+    startTransition(async () => {
+      const result = await saveDerivedFramePromptOverride(scene.id, derivedDraft);
+      if (!result.ok) toast.error(result.error);
+      else
+        toast.success(
+          "Derived-frame prompt override saved. Next re-derive sends it verbatim to Gemini and skips the Claude composer.",
+        );
+    });
+  }
+
+  function handleResetDerivedOverride() {
+    startTransition(async () => {
+      const result = await saveDerivedFramePromptOverride(scene.id, null);
+      if (!result.ok) toast.error(result.error);
+      else
+        toast.success(
+          "Derived override cleared — Claude will compose the edit instruction next time.",
         );
     });
   }
@@ -517,7 +551,7 @@ export function SceneCard({
 
         {showPrompt && (
           <div className="space-y-2 rounded border border-dashed border-[var(--border)] p-2">
-            {isPair && scene.startPrompt && scene.endPrompt && (
+            {isPair && (
               <div className="flex gap-1 rounded border border-[var(--border)] p-0.5 text-[11px]">
                 <button
                   type="button"
@@ -528,7 +562,7 @@ export function SceneCard({
                       : "text-[var(--muted)] hover:text-foreground"
                   }`}
                 >
-                  {scene.pair_anchor === "start" ? "Anchor (editable)" : "Derived (read-only)"}
+                  Start frame {scene.pair_anchor === "start" ? "(anchor)" : "(derived)"}
                 </button>
                 <button
                   type="button"
@@ -539,7 +573,7 @@ export function SceneCard({
                       : "text-[var(--muted)] hover:text-foreground"
                   }`}
                 >
-                  {scene.pair_anchor === "end" ? "Anchor (editable)" : "Derived (read-only)"}
+                  End frame {scene.pair_anchor === "end" ? "(anchor)" : "(derived)"}
                 </button>
               </div>
             )}
@@ -547,37 +581,65 @@ export function SceneCard({
             {(() => {
               const showingAnchor = !isPair || scene.pair_anchor === showPrompt;
               if (!showingAnchor) {
-                // Derived frame — read-only edit instruction
-                const derivedPrompt =
-                  showPrompt === "end" ? scene.endPrompt : scene.startPrompt;
+                // Derived side — editable Gemini prompt (full wrapped text)
+                const isOverridden = !!scene.derived_frame_prompt_override;
+                const dirty = derivedDraft !== (scene.derived_frame_prompt_override ?? derivedPromptValue);
                 return (
                   <>
                     <p className="text-[11px] text-[var(--muted)]">
-                      Derived frames are produced by Claude composing a delta edit instruction
-                      from the anchor. To change the derived frame, edit the anchor prompt and
-                      re-derive — or wait for the upcoming explicit-edit-instruction support.
+                      Edit the prompt sent to Gemini for the derived frame.{" "}
+                      <span className="font-medium text-foreground">Save</span> uses it verbatim
+                      on the next re-derive — Claude&apos;s edit-instruction composer is skipped
+                      entirely. Include explicit &quot;EDIT this image&quot; framing yourself if
+                      you want it.{" "}
+                      <span className="font-medium text-foreground">Reset</span> hands authorship
+                      back to Claude.
+                      {isOverridden && (
+                        <span className="ml-1 rounded bg-amber-500/15 px-1 py-0.5 text-amber-300">
+                          OVERRIDE ACTIVE
+                        </span>
+                      )}
                     </p>
                     <textarea
-                      readOnly
-                      value={derivedPrompt ?? "(no prompt recorded)"}
-                      rows={10}
-                      className="w-full resize-y rounded border border-[var(--border)] bg-[var(--surface-2)] p-2 font-mono text-[11px] leading-relaxed text-foreground"
-                      onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                      value={derivedDraft}
+                      onChange={(e) => setDerivedDraft(e.target.value)}
+                      rows={12}
+                      className="w-full resize-y rounded border border-[var(--border)] bg-[var(--surface-2)] p-2 font-mono text-[11px] leading-relaxed text-foreground focus:border-amber-500/60 focus:outline-none"
+                      placeholder="(no derived prompt yet — derive the frame once, or paste a custom prompt here)"
                     />
-                    <Button
-                      variant="secondary"
-                      onClick={() => copyPrompt(derivedPrompt ?? "")}
-                      className="text-xs"
-                      disabled={!derivedPrompt}
-                    >
-                      Copy
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        onClick={handleSaveDerivedOverride}
+                        disabled={isPending || !dirty || derivedDraft.trim().length === 0}
+                        className="text-xs"
+                      >
+                        {isPending ? "Saving…" : isOverridden ? "Save override" : "Save as override"}
+                      </Button>
+                      {isOverridden && (
+                        <Button
+                          variant="secondary"
+                          onClick={handleResetDerivedOverride}
+                          disabled={isPending}
+                          className="text-xs"
+                        >
+                          Reset to auto
+                        </Button>
+                      )}
+                      <Button
+                        variant="secondary"
+                        onClick={() => copyPrompt(derivedDraft)}
+                        className="text-xs"
+                        disabled={!derivedDraft}
+                      >
+                        Copy
+                      </Button>
+                    </div>
                   </>
                 );
               }
               // Anchor (or SINGLE) — editable
               const isOverridden = !!scene.keyframe_prompt_override;
-              const dirty = promptDraft !== (scene.keyframe_prompt_override ?? scene.startPrompt ?? scene.endPrompt ?? "");
+              const dirty = anchorDraft !== (scene.keyframe_prompt_override ?? anchorPrompt);
               return (
                 <>
                   <p className="text-[11px] text-[var(--muted)]">
@@ -594,16 +656,16 @@ export function SceneCard({
                     )}
                   </p>
                   <textarea
-                    value={promptDraft}
-                    onChange={(e) => setPromptDraft(e.target.value)}
+                    value={anchorDraft}
+                    onChange={(e) => setAnchorDraft(e.target.value)}
                     rows={12}
                     className="w-full resize-y rounded border border-[var(--border)] bg-[var(--surface-2)] p-2 font-mono text-[11px] leading-relaxed text-foreground focus:border-amber-500/60 focus:outline-none"
                     placeholder="(no prompt yet — generate the keyframe once, or paste a custom prompt here)"
                   />
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
-                      onClick={handleSavePromptOverride}
-                      disabled={isPending || !dirty || promptDraft.trim().length === 0}
+                      onClick={handleSaveAnchorOverride}
+                      disabled={isPending || !dirty || anchorDraft.trim().length === 0}
                       className="text-xs"
                     >
                       {isPending ? "Saving…" : isOverridden ? "Save override" : "Save as override"}
@@ -611,7 +673,7 @@ export function SceneCard({
                     {isOverridden && (
                       <Button
                         variant="secondary"
-                        onClick={handleResetPromptOverride}
+                        onClick={handleResetAnchorOverride}
                         disabled={isPending}
                         className="text-xs"
                       >
@@ -620,9 +682,9 @@ export function SceneCard({
                     )}
                     <Button
                       variant="secondary"
-                      onClick={() => copyPrompt(promptDraft)}
+                      onClick={() => copyPrompt(anchorDraft)}
                       className="text-xs"
-                      disabled={!promptDraft}
+                      disabled={!anchorDraft}
                     >
                       Copy
                     </Button>

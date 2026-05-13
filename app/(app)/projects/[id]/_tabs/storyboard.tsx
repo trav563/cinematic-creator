@@ -10,7 +10,7 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
   const { data: scenes } = await supabase
     .from("scenes")
     .select(
-      "id, scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, status, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id, reference_image_urls, referenced_asset_ids, keyframe_prompt_override",
+      "id, scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, status, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id, reference_image_urls, referenced_asset_ids, keyframe_prompt_override, derived_frame_prompt_override",
     )
     .eq("project_id", projectId)
     .order("scene_number");

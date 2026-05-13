@@ -50,7 +50,7 @@ export const derivePairedFrameFunction = inngest.createFunction(
       const { data: scene } = await supabase
         .from("scenes")
         .select(
-          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, referenced_asset_ids, current_start_keyframe_id, current_end_keyframe_id",
+          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, referenced_asset_ids, current_start_keyframe_id, current_end_keyframe_id, derived_frame_prompt_override",
         )
         .eq("id", data.sceneId)
         .single();
@@ -110,7 +110,19 @@ export const derivePairedFrameFunction = inngest.createFunction(
       };
     });
 
+    const userOverride =
+      typeof ctx.scene.derived_frame_prompt_override === "string" &&
+      ctx.scene.derived_frame_prompt_override.trim().length > 0
+        ? ctx.scene.derived_frame_prompt_override
+        : null;
+
+    // If the user has overridden the prompt, we skip Anthropic entirely — we don't even
+    // need the Anthropic key. Only Google is required for the actual edit.
     const apiKeys = await step.run("fetch-keys", async () => {
+      if (userOverride) {
+        const google = await getProviderKey(data.userId, "google_ai_studio");
+        return { anthropic: "", google };
+      }
       const [anthropic, google] = await Promise.all([
         getProviderKey(data.userId, "anthropic"),
         getProviderKey(data.userId, "google_ai_studio"),
@@ -118,28 +130,33 @@ export const derivePairedFrameFunction = inngest.createFunction(
       return { anthropic, google };
     });
 
-    const editInstruction = await step.run("compose-edit-instruction", () =>
-      composePairedFrameEditInstruction({
-        apiKey: apiKeys.anthropic,
-        sceneDescription: ctx.scene.description,
-        pairAnchor: ctx.anchorRole,
-        anchorDirection: ctx.scene.anchor_direction,
-        camera: ctx.scene.camera,
-        beat: ctx.scene.beat,
-        act: ctx.scene.act,
-        referencedAssetNames: ctx.referencedNames,
-      }),
-    );
+    const editInstruction = userOverride
+      ? userOverride
+      : await step.run("compose-edit-instruction", () =>
+          composePairedFrameEditInstruction({
+            apiKey: apiKeys.anthropic,
+            sceneDescription: ctx.scene.description,
+            pairAnchor: ctx.anchorRole,
+            anchorDirection: ctx.scene.anchor_direction,
+            camera: ctx.scene.camera,
+            beat: ctx.scene.beat,
+            act: ctx.scene.act,
+            referencedAssetNames: ctx.referencedNames,
+          }),
+        );
 
     const anchorImage = await step.run("load-anchor-image", async () => {
       return downloadAsServiceBase64(ctx.anchorImagePath);
     });
 
     const result = await step.run("generate-paired-image", async () => {
-      // Wrap Claude's delta instruction with explicit edit framing. Without this,
-      // Gemini 3 Pro Image often treats the input as a style reference and returns
-      // a near-identical frame instead of applying the modification.
-      const wrappedPrompt = `EDIT the provided image. This is an EDIT operation, NOT a regeneration — the output must be visibly different from the input in the specific ways listed below, while preserving everything not explicitly changed.
+      // When the user has supplied an override, send it verbatim — they're seeing the
+      // full wrapped prompt in the UI and editing that. Otherwise, wrap Claude's delta
+      // instruction with explicit edit framing (without it, Gemini often treats the
+      // input as a style reference and returns a near-identical frame).
+      const wrappedPrompt = userOverride
+        ? editInstruction
+        : `EDIT the provided image. This is an EDIT operation, NOT a regeneration — the output must be visibly different from the input in the specific ways listed below, while preserving everything not explicitly changed.
 
 CHANGES TO APPLY:
 ${editInstruction}

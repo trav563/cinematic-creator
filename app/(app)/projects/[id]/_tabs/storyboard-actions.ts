@@ -74,6 +74,29 @@ export async function saveScenePromptOverride(
   return { ok: true };
 }
 
+export async function saveDerivedFramePromptOverride(
+  sceneId: string,
+  prompt: string | null,
+): Promise<Result> {
+  const supabase = await createSupabaseServerClient();
+  const { data: scene } = await supabase
+    .from("scenes")
+    .select("id, project_id")
+    .eq("id", sceneId)
+    .single();
+  if (!scene) return { ok: false, error: "Scene not found" };
+
+  const value = prompt && prompt.trim().length > 0 ? prompt : null;
+  const { error } = await supabase
+    .from("scenes")
+    .update({ derived_frame_prompt_override: value })
+    .eq("id", sceneId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true };
+}
+
 export async function attachAssetToScene(
   sceneId: string,
   assetId: string,

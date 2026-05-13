@@ -223,6 +223,11 @@ export const StoryboardSchema = z.object({
           .describe(
             "One-line scene description, ~20 words max. Reference assets (characters, locations, objects) by their snake_case name verbatim — the keyframe matcher uses these names to attach the right reference images. For PAIR scenes, describe the BOTH the start and end states in the same sentence (e.g. 'young_link draws master_sword from pedestal — beam of light erupts, dust scatters' implies anchor=end with a clean before-state). No over-description of asset appearances (refs carry the visual).",
           ),
+        motion_prompt: z
+          .string()
+          .describe(
+            "Kling-optimized motion prompt that animates this scene's keyframe into a 5-10s clip. 200-400 characters in 2-4 short sentences. MUST: (1) lead with a camera-movement verb from the project's ALLOWED motion vocabulary (NEVER from the FORBIDDEN list); (2) sequence 2-4 sub-beats of subject motion (concrete verbs like 'hand grazes', 'embers swirl' — no vague 'moves'); (3) include at least one atmospheric/sensory detail Kling can render (haze, dust, embers, lens flare, sun shafts, motion blur, particles); (4) end with a mood adjective or short phrase ('reverent', 'cold dread', 'frantic urgency'); (5) read as narration, NOT as an instruction to a model; (6) NOT re-describe character appearance — the keyframe carries identity. Frame-role awareness: SINGLE = full motion arc, PAIR = describes the full transition (start anticipation through end payoff) since one Kling clip animates the whole scene.",
+          ),
       }),
     )
     .describe("Full storyboard."),
@@ -257,13 +262,18 @@ export async function proposeStoryboard(args: ProposeStoryboardArgs): Promise<St
   const masterWorkflow = await loadMasterWorkflow();
   const presetContent = await loadStylePreset(args.stylePreset);
   const presetDirective = buildPresetCameraDirective(args.stylePreset, args.subMode);
+  const presetMotionDirective = buildPresetMotionDirective(args.stylePreset, args.subMode);
   const client = new Anthropic({ apiKey: args.apiKey });
 
   const system = `${presetDirective}
 
 ---
 
-You are the storyboard designer for this trailer. The brief and rough scene outline already exist; your job is to expand the outline into a dense, production-ready storyboard table per master_workflow.md Step 1.
+${presetMotionDirective}
+
+---
+
+You are the storyboard designer for this trailer. The brief and rough scene outline already exist; your job is to expand the outline into a dense, production-ready storyboard table per master_workflow.md Step 1, AND to author the per-scene Kling motion prompt that will animate each keyframe.
 
 The project's rendering identity (above) is non-negotiable. EVERY camera value you produce must come from the ALLOWED camera vocabulary list above. NONE may come from the FORBIDDEN list. If a scene's natural framing conflicts with the project's identity (e.g. a Dutch angle in a gameplay project), substitute it with the closest allowed equivalent.
 
@@ -289,7 +299,21 @@ ${presetContent}
 
 Given the brief, asset list, and the rough scene outline, produce the full storyboard table. Use the rough outline as the spine — but you can refine, renumber, add, or merge scenes if the structure improves. Aim for the suggested scene count (each row = one Kling clip).
 
-For each scene set ALL columns: scene_number, act, beat, camera, frame_role (SINGLE or PAIR), pair_anchor (start/end for PAIR, null for SINGLE), anchor_direction (rationale for PAIR, null for SINGLE), description.
+For each scene set ALL columns: scene_number, act, beat, camera, frame_role (SINGLE or PAIR), pair_anchor (start/end for PAIR, null for SINGLE), anchor_direction (rationale for PAIR, null for SINGLE), description, motion_prompt.
+
+# Motion prompt authoring (Kling-optimal)
+
+In addition to the storyboard columns, you must write the **motion_prompt** for every scene. This is the prompt Kling uses to animate the still keyframe into a 5-10s clip. The prompt is non-trivial — bad prompts produce flat, generic motion. Apply ALL of the following principles:
+
+1. **Lead with camera movement.** Kling responds best to motion verbs at the very start. Use the project's ALLOWED motion vocabulary (above) — these are the verbs that match the project's identity. NEVER use a verb from the FORBIDDEN list.
+2. **Subject motion comes second, with sub-beats.** Sequence 2-4 concrete beats across the clip. "Hand grazes the hilt — fingers tighten — blade rings free, catches the dawn light" is what gives Kling a confident motion arc instead of a stiff one-note loop. Concrete verbs only ("hand trembles", "embers swirl", "cape billows"); never vague ones ("moves", "happens").
+3. **Atmosphere is mandatory.** Every prompt must include at least one sensory atmospheric detail Kling can render: volumetric haze, dust motes, embers, rain streaks, lens flare, sun shafts, particles, motion blur, depth-of-field shift. Skipping atmosphere is the #1 reason Kling output looks flat.
+4. **Concise syntax, rich content.** 200-400 characters in 2-4 short sentences. Plain English, no markdown, no instructional fluff. Tight + detailed wins; long + sparse fails.
+5. **End with a mood adjective.** "Reverent." "Frantic urgency." "Cold dread." "Weightless awe." This sets Kling's emotional register.
+6. **No character descriptions.** The keyframe + bound element carry identity. Don't re-describe what the character looks like.
+7. **Read as narration, not as an instruction.** ✅ "Slow push-in. Link's hand trembles, then steadies, closes around the hilt — blade rings free, catches the dawn light. Dust motes spiral in the gold shaft. Reverent." ❌ "Generate a video where..."
+8. **Story coherence.** Pacing follows the trailer arc — act 1 = slower contemplative motion, act 2 = building energy, climax = peak intensity, title/resolution = controlled stillness or final exhale. Recurring motifs (if any) should appear in the motion prompts of scenes that should carry them. Adjacent scenes should contrast — don't repeat the same camera move twice in a row.
+9. **PAIR scenes**: since the storyboard now models a PAIR as ONE Kling clip animating both keyframes, the motion prompt should describe the full transition from anchor to derived state — anticipation through payoff. Use the anchor_direction to guide the energy flow.
 
 Run the SELF-CHECK CHECKLIST before delivering:
 - Camera angle variety (no consecutive duplicates)
@@ -298,7 +322,8 @@ Run the SELF-CHECK CHECKLIST before delivering:
 - Scope fidelity (no excluded elements)
 - Pacing escalates, breathes, climaxes
 - Aspect ratio compositions read correctly
-- All asset references in descriptions use snake_case names from the asset list`;
+- All asset references in descriptions use snake_case names from the asset list
+- Every scene has a motion_prompt that meets ALL the principles above (camera-verb lead, 2-4 sub-beats, atmospheric detail, mood-adjective ending, narration tone, no character re-description, 200-400 chars)`;
 
   const userMessage = `# Brief
 
@@ -322,7 +347,7 @@ ${args.existingScenes.map((s) => `${s.scene_number}. [${s.act ?? "?"}] ${s.descr
 
   const response = await client.messages.parse({
     model: "claude-opus-4-7",
-    max_tokens: 16000,
+    max_tokens: 24000,
     thinking: { type: "adaptive" },
     system,
     messages: [{ role: "user", content: userMessage }],

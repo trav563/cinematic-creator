@@ -144,10 +144,21 @@ export const PRESET_PROFILES: Record<StylePreset, PresetProfile> = {
       "Real-time global illumination bloom, screen-space reflections in puddles and metal, real-time shadow softness, gameplay particle FX (sparks, muzzle flashes, magic VFX), subtle TAA temporal artifacts on motion edges, gameplay-readable depth of field (NOT cinematic-shallow).",
     subModes: [
       {
-        value: "third_person",
-        label: "Third-person (behind shoulder)",
+        value: "open_world_third_person",
+        label: "Open World — Third Person (centered)",
         cameraNotes:
-          "Behind-the-shoulder third-person follow camera. Subject is mid-frame, camera tethered behind and slightly above. Mid focal length (~50mm equivalent). Modern action-adventure standard (Last of Us / God of War / Tomb Raider).",
+          "Behind-the-back third-person chase camera, slightly elevated above the subject. Subject is centered horizontally, occupies the lower-center of the frame, full body visible at medium gameplay distance (~50mm equivalent feel). The wider playable space — environment, paths, landmarks — remains clearly readable above and around the character. This is hub-area / exploration framing: feels like an active gameplay capture during play, NOT a posed showcase or cinematic shot. Modern open-world platformer / action-adventure standard (Mario Odyssey / DK Country / 3D platformer remakes / open-world Zelda).",
+        motionVerbAdditions: [
+          "chase camera follow",
+          "open-world traversal pan",
+          "hub-area orbit",
+        ],
+      },
+      {
+        value: "third_person",
+        label: "Third-person (behind shoulder, tighter)",
+        cameraNotes:
+          "Behind-the-shoulder third-person follow camera, tighter than open-world chase. Subject is mid-frame, camera tethered behind and slightly above. Mid focal length (~50mm equivalent). Modern action-adventure standard (Last of Us / God of War / Tomb Raider).",
         motionVerbAdditions: ["third-person follow accelerates", "orbit around player"],
       },
       {
@@ -172,7 +183,7 @@ export const PRESET_PROFILES: Record<StylePreset, PresetProfile> = {
         motionVerbAdditions: ["lock-on snap", "combat camera shake on impact", "tight orbit during attack"],
       },
     ],
-    defaultSubMode: "third_person",
+    defaultSubMode: "open_world_third_person",
   },
 
   animated_film: {

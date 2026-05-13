@@ -119,8 +119,6 @@ export function VideoTabHeader({
     });
   }
 
-  const hasAnyPrompts = promptedScenes > 0;
-
   return (
     <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -130,7 +128,7 @@ export function VideoTabHeader({
             {totalScenes} scenes · {keyframedScenes} keyframed · {promptedScenes} have motion prompts · {videoedScenes} have video.
           </p>
           <p className="text-xs text-[var(--muted)]">
-            Claude can write Kling-optimized motion prompts for every scene at once. You can edit any prompt before generating its video.
+            Motion prompts are auto-populated when the storyboard is generated. Use this to regenerate them in bulk (e.g. after tuning the preset). You can also edit any prompt directly on a scene before generating its video.
           </p>
           {activeJob?.status === "failed" && (
             <p className="text-xs text-red-400">Failed: {activeJob.error ?? "unknown error"}</p>
@@ -139,13 +137,11 @@ export function VideoTabHeader({
         <Button
           onClick={handleGenerate}
           disabled={isPending || isRunning}
-          variant={hasAnyPrompts ? "secondary" : "primary"}
+          variant="secondary"
         >
           {isRunning
             ? `${activeJob?.status === "running" ? "Writing prompts" : "Queued"}…`
-            : hasAnyPrompts
-              ? "Regenerate motion prompts"
-              : "Auto-generate motion prompts"}
+            : "Regenerate motion prompts (all)"}
         </Button>
       </div>
 

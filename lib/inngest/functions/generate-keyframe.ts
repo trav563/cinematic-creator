@@ -42,7 +42,9 @@ export const generateKeyframeFunction = inngest.createFunction(
     const ctx = await step.run("load-context", async () => {
       const { data: scene } = await supabase
         .from("scenes")
-        .select("scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description")
+        .select(
+          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, reference_image_urls",
+        )
         .eq("id", data.sceneId)
         .single();
       if (!scene) throw new Error("Scene not found");
@@ -54,58 +56,74 @@ export const generateKeyframeFunction = inngest.createFunction(
         .single();
       if (!project) throw new Error("Project not found");
 
-      // Load all assets (characters, locations, objects) in the project that have a
-      // confirmed model sheet — we'll match these by name against the scene description
-      // to figure out which references to attach.
-      const { data: assets } = await supabase
+      // Load ALL assets (with or without confirmed variations) so the matcher can
+      // surface ones without a confirmed image — those fall back to the inline
+      // base_description path in the prompt builder (Banjo CSV pattern).
+      const { data: allAssets } = await supabase
         .from("assets")
-        .select("id, name, kind, role, confirmed_variation_id")
-        .eq("project_id", data.projectId)
-        .not("confirmed_variation_id", "is", null);
+        .select("id, name, kind, role, base_description, confirmed_variation_id")
+        .eq("project_id", data.projectId);
 
-      // Get the image_url path for each confirmed variation
-      const refImagePaths: Array<{ name: string; role: string | null; path: string }> = [];
-      if (assets && assets.length) {
-        const ids = assets.map((a) => a.confirmed_variation_id).filter(Boolean) as string[];
+      // Sign URLs for confirmed variations only
+      const confirmedAssets = (allAssets ?? []).filter((a) => a.confirmed_variation_id);
+      const variationPathById = new Map<string, string>();
+      if (confirmedAssets.length) {
+        const ids = confirmedAssets
+          .map((a) => a.confirmed_variation_id)
+          .filter(Boolean) as string[];
         const { data: variations } = await supabase
           .from("asset_variations")
           .select("id, image_url")
           .in("id", ids);
-        const byId = new Map((variations ?? []).map((v) => [v.id, v.image_url]));
-        for (const a of assets) {
-          if (!a.confirmed_variation_id) continue;
-          const path = byId.get(a.confirmed_variation_id);
-          if (path) refImagePaths.push({ name: a.name, role: a.role, path });
-        }
+        for (const v of variations ?? []) variationPathById.set(v.id, v.image_url);
       }
 
-      return { scene, project, refImagePaths };
+      const allAssetsForMatching = (allAssets ?? []).map((a) => ({
+        name: a.name,
+        kind: (a.kind ?? null) as "character" | "location" | "object" | null,
+        role: a.role,
+        baseDescription: a.base_description,
+        path: a.confirmed_variation_id
+          ? variationPathById.get(a.confirmed_variation_id) ?? null
+          : null,
+      }));
+
+      return { scene, project, allAssetsForMatching };
     });
 
-    // Match reference assets against the scene description by full snake_case name.
-    // propose_storyboard is instructed to embed asset names verbatim (e.g.
-    // "link_ordon's eye opens"), so we require an exact full-name match. This
-    // avoids overmatching: single-word matching on "link" would attach link_ordon,
-    // link_hero, AND wolf_link to any scene mentioning Link, confusing Gemini.
-    // Underscores are treated as separators in the boundary regex (JS's \b
-    // considers `_` a word char, which would let \blink\b miss inside "link_ordon").
+    // Match assets against the scene description by full snake_case name.
+    // Word-boundary regex with [^a-z0-9] so underscores separate (JS's \b counts _ as
+    // a word char, which would miss inside "link_ordon").
     const desc = ctx.scene.description.toLowerCase();
-    const referencedAssets = ctx.refImagePaths.filter((a) => {
+    const matchedAssets = ctx.allAssetsForMatching.filter((a) => {
       const fullName = a.name.toLowerCase();
       return new RegExp(`(?:^|[^a-z0-9])${fullName}(?:[^a-z0-9]|$)`, "i").test(desc);
     });
+    const matchedWithImage = matchedAssets.filter((a) => a.path);
+    const matchedWithoutImage = matchedAssets.filter((a) => !a.path);
+
+    const sceneRefPaths = (ctx.scene.reference_image_urls ?? []) as string[];
 
     const refImages = await step.run("load-refs", async () => {
       console.log(
-        `[generate-keyframe] scene ${ctx.scene.scene_number}: ${referencedAssets.length}/${ctx.refImagePaths.length} refs matched (${referencedAssets.map((a) => a.name).join(", ") || "none"}). Description: "${ctx.scene.description}"`,
+        `[generate-keyframe] scene ${ctx.scene.scene_number}: ${matchedWithImage.length}/${ctx.allAssetsForMatching.length} asset refs with images matched (${matchedAssets.map((a) => a.name).join(", ") || "none"}). ${sceneRefPaths.length} scene-level ref(s). Description: "${ctx.scene.description}"`,
       );
-      const loaded = [];
-      for (const a of referencedAssets) {
+      const loaded: { base64: string; mimeType: string }[] = [];
+      // Scene-level refs go FIRST so the model anchors on them as the canonical
+      // composition / lighting / environment reference for this exact shot.
+      for (const path of sceneRefPaths) {
         try {
-          const ref = await downloadAsServiceBase64(a.path);
-          loaded.push(ref);
+          loaded.push(await downloadAsServiceBase64(path));
         } catch (err) {
-          console.warn(`Failed to load ref for ${a.name} at ${a.path}:`, err);
+          console.warn(`Failed to load scene ref at ${path}:`, err);
+        }
+      }
+      // Asset refs (character / location / object identity)
+      for (const a of matchedWithImage) {
+        try {
+          loaded.push(await downloadAsServiceBase64(a.path!));
+        } catch (err) {
+          console.warn(`Failed to load asset ref for ${a.name} at ${a.path}:`, err);
         }
       }
       return loaded;
@@ -123,9 +141,6 @@ export const generateKeyframeFunction = inngest.createFunction(
         camera: ctx.scene.camera,
         beat: ctx.scene.beat,
         act: ctx.scene.act,
-        // Map the new SINGLE/PAIR model to the buildKeyframePrompt's older
-        // SINGLE/PAIR-START/PAIR-END union — for PAIR scenes the anchor side determines
-        // which composition guidance applies (PAIR-START = clean before, PAIR-END = money shot).
         frameRole:
           ctx.scene.frame_role === "PAIR"
             ? ctx.scene.pair_anchor === "end"
@@ -136,7 +151,23 @@ export const generateKeyframeFunction = inngest.createFunction(
         aspectRatio: (ctx.project.aspect_ratio ?? "16:9") as AspectRatio,
         stylePreset: (ctx.project.style_preset ?? "cinematic_blockbuster") as StylePreset,
         subMode: presetOptions.subMode ?? null,
-        referencedAssets: referencedAssets.map((a) => ({ name: a.name, role: a.role })),
+        referencedAssets: [
+          ...matchedWithImage.map((a) => ({
+            name: a.name,
+            role: a.role,
+            kind: a.kind,
+            baseDescription: a.baseDescription,
+            hasReferenceImage: true,
+          })),
+          ...matchedWithoutImage.map((a) => ({
+            name: a.name,
+            role: a.role,
+            kind: a.kind,
+            baseDescription: a.baseDescription,
+            hasReferenceImage: false,
+          })),
+        ],
+        hasSceneReferences: sceneRefPaths.length > 0,
         editInstruction: data.editInstruction,
       });
     });

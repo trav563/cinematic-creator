@@ -10,7 +10,7 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
   const { data: scenes } = await supabase
     .from("scenes")
     .select(
-      "id, scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, status, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id",
+      "id, scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, status, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id, reference_image_urls",
     )
     .eq("project_id", projectId)
     .order("scene_number");
@@ -71,10 +71,12 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
     }
   }
 
-  // Sign all unique keyframe paths in parallel (one round trip per signed URL,
-  // but they all fire concurrently rather than sequentially per scene).
+  // Sign all unique paths in parallel (keyframes + per-scene refs).
   const allPaths = new Set<string>();
   for (const path of pathById.values()) allPaths.add(path);
+  for (const s of scenesArr) {
+    for (const p of (s.reference_image_urls ?? []) as string[]) allPaths.add(p);
+  }
   const pathsArr = Array.from(allPaths);
   const signedUrls = await Promise.all(pathsArr.map((p) => signedUrl(p)));
   const urlByPath = new Map<string, string | null>();
@@ -86,11 +88,16 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
     const endPath = s.current_end_keyframe_id
       ? pathById.get(s.current_end_keyframe_id) ?? null
       : null;
+    const refs = ((s.reference_image_urls ?? []) as string[]).map((path) => ({
+      path,
+      url: urlByPath.get(path) ?? null,
+    }));
     return {
       ...s,
       startKeyframeUrl: startPath ? urlByPath.get(startPath) ?? null : null,
       endKeyframeUrl: endPath ? urlByPath.get(endPath) ?? null : null,
       keyframeUrl: startPath ? urlByPath.get(startPath) ?? null : null,
+      refs,
       activeJob: jobBySceneId.get(s.id) ?? null,
     };
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -10,12 +10,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Lightbox } from "@/components/ui/lightbox";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { generateKeyframe, derivePairedFrame } from "./storyboard-actions";
+import {
+  generateKeyframe,
+  derivePairedFrame,
+  uploadSceneReference,
+  removeSceneReference,
+} from "./storyboard-actions";
 
 interface ActiveJob {
   id: string;
   status: string;
   error: string | null;
+}
+
+interface SceneRef {
+  path: string;
+  url: string | null;
 }
 
 interface Scene {
@@ -34,6 +44,7 @@ interface Scene {
   endKeyframeUrl: string | null;
   /** Back-compat alias for SINGLE-only consumers */
   keyframeUrl: string | null;
+  refs: SceneRef[];
   activeJob: ActiveJob | null;
 }
 
@@ -49,8 +60,11 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
   const [isPending, startTransition] = useTransition();
   const [editInstruction, setEditInstruction] = useState("");
   const [showEdit, setShowEdit] = useState(false);
+  const [showRefs, setShowRefs] = useState(false);
   const [lightboxFrame, setLightboxFrame] = useState<"start" | "end" | null>(null);
+  const [lightboxRef, setLightboxRef] = useState<SceneRef | null>(null);
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(scene.activeJob);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setActiveJob(scene.activeJob);
@@ -99,6 +113,29 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
       setActiveJob({ id: result.data!.jobId, status: "queued", error: null });
       setEditInstruction("");
       setShowEdit(false);
+    });
+  }
+
+  function handleUploadRef(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const formData = new FormData();
+    for (const f of Array.from(files)) formData.append("files", f);
+    startTransition(async () => {
+      const result = await uploadSceneReference(scene.id, formData);
+      if (!result.ok) toast.error(result.error);
+      else
+        toast.success(
+          `Uploaded ${result.data?.paths.length ?? 0} scene reference${result.data?.paths.length === 1 ? "" : "s"}`,
+        );
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    });
+  }
+
+  function handleRemoveRef(path: string) {
+    startTransition(async () => {
+      const result = await removeSceneReference(scene.id, path);
+      if (!result.ok) toast.error(result.error);
     });
   }
 
@@ -219,6 +256,75 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
           <p className="text-xs text-red-400">Failed: {activeJob.error ?? "unknown error"}</p>
         )}
 
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => setShowRefs((v) => !v)}
+            className="text-xs text-[var(--muted)] underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {scene.refs.length > 0
+              ? `Scene refs (${scene.refs.length})${showRefs ? " ▴" : " ▾"}`
+              : showRefs
+                ? "+ Add scene reference ▴"
+                : "+ Add scene reference"}
+          </button>
+        </div>
+
+        {showRefs && (
+          <div className="space-y-2 rounded border border-dashed border-[var(--border)] p-2">
+            <p className="text-[11px] text-[var(--muted)]">
+              Scene-specific reference images (e.g. an actual screenshot of the location). The
+              keyframe worker prepends these to the model input as the canonical composition /
+              lighting reference for THIS shot.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {scene.refs.map((ref) =>
+                ref.url ? (
+                  <div
+                    key={ref.path}
+                    className="group relative h-16 w-16 overflow-hidden rounded border border-[var(--border)]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setLightboxRef(ref)}
+                      className="block h-full w-full"
+                      aria-label="Enlarge scene reference"
+                    >
+                      <Image
+                        src={ref.url}
+                        alt=""
+                        fill
+                        sizes="64px"
+                        className="object-cover"
+                        unoptimized
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveRef(ref.path)}
+                      className="absolute right-0.5 top-0.5 rounded bg-black/60 px-1.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
+                      disabled={isPending}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : null,
+              )}
+              <label className="flex h-16 w-16 cursor-pointer items-center justify-center rounded border border-dashed border-[var(--border)] text-xl text-[var(--muted)] hover:bg-[var(--surface-2)]">
+                +
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleUploadRef}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+        )}
+
         <div className="mt-auto flex flex-wrap items-center gap-2 pt-2">
           <Button
             variant="secondary"
@@ -284,6 +390,13 @@ export function SceneCard({ scene, projectId }: { scene: Scene; projectId: strin
             {isPair && lightboxFrame ? ` · ${lightboxFrame} frame` : ""}
           </span>
         }
+      />
+
+      <Lightbox
+        open={!!lightboxRef}
+        onClose={() => setLightboxRef(null)}
+        src={lightboxRef?.url ?? null}
+        alt={`Scene ${scene.scene_number} reference`}
       />
     </div>
   );

@@ -99,6 +99,7 @@ export const proposeStoryboardFunction = inngest.createFunction(
           pair_anchor: s.pair_anchor,
           anchor_direction: s.anchor_direction,
           description: s.description,
+          motion_prompt: s.motion_prompt,
           status: "planned",
         })),
       );

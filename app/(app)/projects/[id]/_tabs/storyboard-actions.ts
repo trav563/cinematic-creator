@@ -3,11 +3,78 @@
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { inngest } from "@/lib/inngest/client";
+import { PROJECT_ASSETS_BUCKET } from "@/lib/storage";
 import type { ProposeStoryboardEventData } from "@/lib/inngest/functions/propose-storyboard";
 import type { GenerateKeyframeEventData } from "@/lib/inngest/functions/generate-keyframe";
 import type { DerivePairedFrameEventData } from "@/lib/inngest/functions/derive-paired-frame";
 
 type Result<T = void> = { ok: true; data?: T } | { ok: false; error: string };
+
+export async function uploadSceneReference(
+  sceneId: string,
+  formData: FormData,
+): Promise<Result<{ paths: string[] }>> {
+  const supabase = await createSupabaseServerClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false, error: "Not signed in" };
+
+  const { data: scene, error: sceneErr } = await supabase
+    .from("scenes")
+    .select("id, project_id, reference_image_urls")
+    .eq("id", sceneId)
+    .single();
+  if (sceneErr || !scene) return { ok: false, error: "Scene not found" };
+
+  const files = formData.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { ok: false, error: "No files provided" };
+
+  const uploadedPaths: string[] = [];
+  for (const file of files) {
+    const ext = file.name.split(".").pop() ?? "png";
+    const filename = `${crypto.randomUUID()}.${ext}`;
+    const path = `${userData.user.id}/${scene.project_id}/scenes/${sceneId}/refs/${filename}`;
+    const { error: upErr } = await supabase.storage
+      .from(PROJECT_ASSETS_BUCKET)
+      .upload(path, file, { contentType: file.type, upsert: false });
+    if (upErr) return { ok: false, error: upErr.message };
+    uploadedPaths.push(path);
+  }
+
+  const newRefs = [...(scene.reference_image_urls ?? []), ...uploadedPaths];
+  const { error: updateErr } = await supabase
+    .from("scenes")
+    .update({ reference_image_urls: newRefs })
+    .eq("id", sceneId);
+  if (updateErr) return { ok: false, error: updateErr.message };
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true, data: { paths: uploadedPaths } };
+}
+
+export async function removeSceneReference(
+  sceneId: string,
+  refPath: string,
+): Promise<Result> {
+  const supabase = await createSupabaseServerClient();
+  const { data: scene, error: sceneErr } = await supabase
+    .from("scenes")
+    .select("id, project_id, reference_image_urls")
+    .eq("id", sceneId)
+    .single();
+  if (sceneErr || !scene) return { ok: false, error: "Scene not found" };
+
+  await supabase.storage.from(PROJECT_ASSETS_BUCKET).remove([refPath]);
+
+  const remaining = (scene.reference_image_urls ?? []).filter((p: string) => p !== refPath);
+  const { error: updateErr } = await supabase
+    .from("scenes")
+    .update({ reference_image_urls: remaining })
+    .eq("id", sceneId);
+  if (updateErr) return { ok: false, error: updateErr.message };
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true };
+}
 
 async function requireUserAndAnthropic() {
   const supabase = await createSupabaseServerClient();

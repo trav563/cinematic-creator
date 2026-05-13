@@ -43,7 +43,7 @@ export const generateKeyframeFunction = inngest.createFunction(
       const { data: scene } = await supabase
         .from("scenes")
         .select(
-          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, reference_image_urls, referenced_asset_ids",
+          "scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, reference_image_urls, referenced_asset_ids, keyframe_prompt_override",
         )
         .eq("id", data.sceneId)
         .single();
@@ -139,6 +139,15 @@ export const generateKeyframeFunction = inngest.createFunction(
     );
 
     const prompt = await step.run("build-prompt", () => {
+      // If the user has prompt-engineered a custom prompt for this scene, use it
+      // verbatim. Otherwise build the deterministic prompt from preset + scene fields.
+      const override = ctx.scene.keyframe_prompt_override as string | null;
+      if (override && override.trim().length > 0) {
+        console.log(
+          `[generate-keyframe] scene ${ctx.scene.scene_number}: using user-supplied prompt override (${override.length} chars).`,
+        );
+        return override;
+      }
       const presetOptions = (ctx.project.style_preset_options ?? {}) as { subMode?: string };
       return buildKeyframePrompt({
         scopeName: ctx.project.scope,

@@ -43,7 +43,9 @@ export const generateMotionPromptsFunction = inngest.createFunction(
 
       const { data: scenes } = await supabase
         .from("scenes")
-        .select("id, scene_number, act, beat, camera, frame_role, anchor_direction, description")
+        .select(
+          "id, scene_number, act, beat, camera, frame_role, anchor_direction, description, keyframe_prompt_override",
+        )
         .eq("project_id", data.projectId)
         .order("scene_number");
       if (!scenes || scenes.length === 0) throw new Error("No scenes to write prompts for");
@@ -80,6 +82,7 @@ export const generateMotionPromptsFunction = inngest.createFunction(
           frame_role: s.frame_role,
           anchor_direction: s.anchor_direction,
           description: s.description,
+          keyframe_prompt_override: s.keyframe_prompt_override,
         })),
       });
     });

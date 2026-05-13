@@ -404,6 +404,13 @@ interface GenerateMotionPromptsArgs {
     frame_role: string;
     anchor_direction: string | null;
     description: string;
+    /**
+     * If the user has prompt-engineered a custom keyframe prompt for this scene,
+     * it overrides what Claude infers from the description. The motion prompt
+     * should reflect what the keyframe will ACTUALLY look like (per the override),
+     * not what the brief description suggests.
+     */
+    keyframe_prompt_override?: string | null;
   }>;
 }
 
@@ -448,7 +455,8 @@ The project's motion vocabulary above is non-negotiable. Every prompt's leading 
    - **PAIR-START**: setup motion only — anticipation, build, the calm before. End the prompt with where the energy is heading but don't deliver it. The PAIR-END frame will pay it off.
    - **PAIR-END**: climactic delivery — the explosion, the impact, the reveal happens. The clip should land the moment.
 9. **Project identity is non-negotiable** — the rendering identity and motion vocabulary at the TOP of this prompt are the source of truth. Cinematic blockbuster wants ARRI-style anamorphic moves; videogame_gameplay wants in-engine camera (behind-shoulder follow / first-person bob / lock-on snap); animated_film wants expressive over-cranked motion. If the project is gameplay or animated, NEVER use cinematic film verbs in the motion prompt.
-10. **Story coherence (non-negotiable)** — every motion prompt must serve the trailer's emotional arc and the scene's role in the larger structure. Random or generic animation breaks the trailer.
+10. **User keyframe overrides are AUTHORITATIVE.** When a scene includes a "[USER KEYFRAME PROMPT OVERRIDE]" block, that text describes the still image the user has prompt-engineered for the keyframe. The motion prompt must animate FROM that still — visual specifics in the override (composition, character placement, lighting, atmosphere, what's on screen) take priority over the brief Action line. Build your sub-beats around what the override says is in the frame.
+11. **Story coherence (non-negotiable)** — every motion prompt must serve the trailer's emotional arc and the scene's role in the larger structure. Random or generic animation breaks the trailer.
    - Read the locked brief, the emotional arc, and the recurring motif before writing any prompts. Identify the trailer's hook, escalation, climax, and resolution. Each scene's motion must reinforce its position in that arc.
    - **Pacing**: act 1 / opening = slower, contemplative motion (gentle drifts, slow push-ins, atmospheric stillness). Act 2 = building energy (faster cuts of motion, more aggressive camera moves). Climax = peak intensity (whip pans, hard impacts, rapid motion). Title / resolution = controlled stillness or final exhale.
    - **Recurring motif callbacks**: if the brief names a recurring visual motif (e.g. "raven flies past", "lens flare across protagonist's eye"), motion prompts in scenes that should carry the motif must reference it explicitly.
@@ -503,7 +511,11 @@ ${args.scenes
       `${s.scene_number}. [${s.act ?? "?"} · ${s.frame_role}${s.anchor_direction ? ` · ${s.anchor_direction}` : ""}]
    Camera: ${s.camera ?? "(unspecified)"}
    Beat: ${s.beat ?? "(unspecified)"}
-   Action: ${s.description}`,
+   Action: ${s.description}${
+     s.keyframe_prompt_override
+       ? `\n   [USER KEYFRAME PROMPT OVERRIDE — this is what the visual will ACTUALLY look like. Trust this over the action line above for visual specifics. Your motion prompt must move FROM this still into a believable 5-10s motion arc.]\n   ${s.keyframe_prompt_override.replace(/\n/g, "\n   ")}`
+       : ""
+   }`,
   )
   .join("\n\n")}
 

@@ -19,6 +19,7 @@ import {
   detachAssetFromScene,
   saveScenePromptOverride,
   saveDerivedFramePromptOverride,
+  deleteScene,
 } from "./storyboard-actions";
 
 interface ActiveJob {
@@ -275,6 +276,18 @@ export function SceneCard({
         toast.success(
           "Derived override cleared — Claude will compose the edit instruction next time.",
         );
+    });
+  }
+
+  function handleDeleteScene() {
+    const confirmed = window.confirm(
+      `Delete scene ${scene.scene_number}? This also deletes its keyframes and video. The next motion-prompt regeneration will skip this scene; regenerating the whole storyboard rebuilds from the brief and would re-add it.`,
+    );
+    if (!confirmed) return;
+    startTransition(async () => {
+      const result = await deleteScene(scene.id);
+      if (!result.ok) toast.error(result.error);
+      else toast.success(`Scene ${scene.scene_number} deleted`);
     });
   }
 
@@ -735,6 +748,14 @@ export function SceneCard({
               Open
             </Link>
           )}
+          <button
+            type="button"
+            onClick={handleDeleteScene}
+            disabled={isPending}
+            className="ml-auto rounded-md border border-red-500/30 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+          >
+            Delete
+          </button>
         </div>
 
         {showEdit && (

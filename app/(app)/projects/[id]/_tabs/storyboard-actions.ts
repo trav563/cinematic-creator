@@ -97,6 +97,29 @@ export async function saveDerivedFramePromptOverride(
   return { ok: true };
 }
 
+/**
+ * Delete a scene and its associated keyframes / videos via FK cascade. Leaves a gap
+ * in scene_number — deliberately, since renumbering risks unique-constraint races
+ * and the gap is harmless (next-scene adjacency in motion prompts uses ORDER BY
+ * scene_number, which works fine with gaps). If the user wants pristine numbering
+ * they can regenerate the storyboard.
+ */
+export async function deleteScene(sceneId: string): Promise<Result> {
+  const supabase = await createSupabaseServerClient();
+  const { data: scene } = await supabase
+    .from("scenes")
+    .select("id, project_id")
+    .eq("id", sceneId)
+    .single();
+  if (!scene) return { ok: false, error: "Scene not found" };
+
+  const { error } = await supabase.from("scenes").delete().eq("id", sceneId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true };
+}
+
 export async function attachAssetToScene(
   sceneId: string,
   assetId: string,

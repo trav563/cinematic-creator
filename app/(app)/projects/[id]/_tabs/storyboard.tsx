@@ -155,7 +155,7 @@ export async function StoryboardTab({ projectId }: { projectId: string }) {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {enrichedScenes.map((s) => (
             <SceneCard
               key={s.id}

@@ -210,14 +210,14 @@ export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; proj
         <div className="flex flex-wrap gap-2">
           {asset.refs.map((ref) =>
             ref.url ? (
-              <div key={ref.path} className="group relative h-20 w-20 overflow-hidden rounded border border-[var(--border)]">
+              <div key={ref.path} className="group relative h-32 w-32 overflow-hidden rounded border border-[var(--border)]">
                 <button
                   type="button"
                   onClick={() => setLightboxRef(ref)}
                   className="block h-full w-full"
                   aria-label="Enlarge reference"
                 >
-                  <Image src={ref.url} alt="" fill sizes="80px" className="object-cover" unoptimized />
+                  <Image src={ref.url} alt="" fill sizes="128px" className="object-cover" unoptimized />
                 </button>
                 <button
                   type="button"
@@ -230,7 +230,7 @@ export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; proj
               </div>
             ) : null,
           )}
-          <label className="flex h-20 w-20 cursor-pointer items-center justify-center rounded border border-dashed border-[var(--border)] text-2xl text-[var(--muted)] hover:bg-[var(--surface-2)]">
+          <label className="flex h-32 w-32 cursor-pointer items-center justify-center rounded border border-dashed border-[var(--border)] text-3xl text-[var(--muted)] hover:bg-[var(--surface-2)]">
             +
             <input
               ref={fileInputRef}
@@ -290,7 +290,7 @@ export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; proj
       {asset.variations.length > 0 && (
         <section className="space-y-2">
           <Label>Variations ({asset.variations.length})</Label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {asset.variations.map((v, idx) =>
               v.signed_url ? (
                 <button
@@ -303,7 +303,7 @@ export function AssetCard({ asset, projectId: _projectId }: { asset: Asset; proj
                       : "border-[var(--border)] hover:border-white/40"
                   }`}
                 >
-                  <Image src={v.signed_url} alt="" fill sizes="200px" className="object-cover" unoptimized />
+                  <Image src={v.signed_url} alt="" fill sizes="400px" className="object-cover" unoptimized />
                   {asset.confirmed_variation_id === v.id && (
                     <span className="absolute bottom-1 right-1 rounded bg-emerald-500/80 px-1.5 py-0.5 text-xs text-white">
                       ✓

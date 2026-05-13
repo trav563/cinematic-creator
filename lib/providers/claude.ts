@@ -542,7 +542,7 @@ const PairedFrameEditSchema = z.object({
   edit_instruction: z
     .string()
     .describe(
-      "Natural-language edit instruction to send to Gemini's image edit endpoint. Tells the model what to add / remove / transform from the source keyframe to produce the paired frame. Concrete, specific, ≤300 chars.",
+      "Natural-language edit instruction to send to Gemini's image edit endpoint. MUST lead with the visible CHANGES (add/remove/transform), then state what to preserve. Concrete and specific. The output should describe at least one element that will look visibly different from the input. 200-500 chars.",
     ),
 });
 
@@ -584,29 +584,38 @@ You are working ${direction}.
 
 # What makes a good edit instruction
 
-1. **Concrete, surgical changes**. Name exactly what to add, remove, or transform. Bad: "make it look after the fight". Good: "Add visible smoke clouds and orange embers above the doorway. Remove the unbroken wooden door — replace with splintered fragments scattered on the threshold. Show ${args.referencedAssetNames.join(" / ") || "subjects"} in the same positions and poses."
+1. **Lead with the VISIBLE CHANGE.** The first sentence must describe what will look different in the output — additions, removals, transformations. Don't bury the delta after preservation language. If the output won't be visibly different from the input, you've failed.
 
-2. **Preservation clauses are mandatory**. State what must NOT change. Camera position, character poses (when they shouldn't move much), composition, lighting direction, color palette, framing, and any unchanged subjects must be explicitly preserved. Without preservation language, Gemini drifts.
+2. **Concrete, surgical changes.** Name exactly what to add, remove, or transform. Bad: "make it look after the fight." Good: "Add thick orange flames erupting from the doorway, with rising black smoke curling above. Replace the intact wooden door with splintered fragments scattered across the threshold."
 
-3. **No new characters**. Don't introduce subjects not in the scene description.
+3. **Preservation clauses come SECOND.** After the change, state what must NOT change. Camera position, character poses (when they shouldn't move much), composition, lighting direction, color palette, framing, and any unchanged subjects must be explicitly preserved. But these go AFTER the deltas, never before.
 
-4. **Match the scene's narrative**. The full scene description tells you both states. Read it carefully and infer the precise visual change between them.
+4. **Magnitude matters.** A PAIR clip needs the start and end frames to be CLEARLY distinct — they're the bookends of a 5-10s motion. Subtle changes get missed: lightning bolts must appear (not just darken), characters must move (not just shift slightly), explosions must be visible (not just smoky), reveals must be obvious. If the scene description names a "money shot" or a transformation, the change must be unmistakable.
 
-5. **Concise**. 1-3 sentences. ≤300 chars when possible. Plain English, no markdown, no instructional fluff.
+5. **No new characters.** Don't introduce subjects not in the scene description.
 
-6. **Do NOT describe the anchor frame** — Gemini already has it. Only describe the DELTA: what changes + what stays.
+6. **Match the scene's narrative.** The full scene description tells you both states. Read it carefully and infer the precise visual change between them.
+
+7. **Concise.** 2-4 sentences, 200-500 chars. Plain English, no markdown, no instructional fluff.
+
+8. **Do NOT describe the anchor frame.** Gemini already has it. Only describe the DELTA: what changes + what stays.
 
 # Examples
 
 PAIR-START (anchor=start, deriving end, direction=FORWARD):
 - Scene: "young_link draws master_sword from pedestal — beam of light erupts, dust scatters"
 - anchor=start (clean before)
-- Output: "Add a vertical beam of golden light erupting from the pedestal where master_sword is being drawn. Add dust motes spiraling upward in the light shaft. Keep young_link's pose, position, and facial expression identical. Keep the temple architecture, camera angle, and surrounding shadows unchanged."
+- Output: "Add a vertical beam of bright golden light erupting upward from the pedestal where master_sword is being drawn — the blade is now half-raised above the pedestal, glowing. Add dust motes spiraling upward in the light shaft and a subtle radial glow on nearby surfaces. Keep young_link's body position, the temple architecture, the camera angle, and the surrounding shadows unchanged."
 
 PAIR-END (anchor=end, deriving start, direction=BACKWARD):
 - Scene: "ganondorf's hand crashes through the throne room window, glass shatters in slow motion"
 - anchor=end (climactic shatter)
-- Output: "Remove all flying glass shards and the impact spray — restore the window to fully intact stained glass. Pull ganondorf's fist back outside the window pane (no longer visible inside the room). Keep the throne room interior, lighting, ganondorf's body angle, and the camera composition exactly as shown."`;
+- Output: "Remove all flying glass shards and the impact spray — restore the window to fully intact stained glass with no breakage. Pull ganondorf's fist back outside the window pane so it is no longer visible inside the room — show only intact glass where the hand was. Keep the throne room interior, lighting, ganondorf's body angle, and the camera composition exactly as shown."
+
+PAIR-END (anchor=end, deriving start, direction=BACKWARD):
+- Scene: "ganondorf mounted on a black warhorse on hyrule_field rears beneath gathering storm as lightning forks down"
+- anchor=end (lightning strike is the money shot)
+- Output: "Remove the lightning bolts entirely from the sky — show the storm clouds still gathering and dark, but with NO lightning yet visible. Lower the horse so all four hooves are on the ground (no longer rearing) and ganondorf is sitting squarely in the saddle in a steady mounted pose. Keep the horse's identity and tack, ganondorf's costume and facial expression, the hyrule_field environment, and the camera angle exactly as shown."`;
 
   const userMessage = `# Scene context
 Act: ${args.act ?? "(unspecified)"}

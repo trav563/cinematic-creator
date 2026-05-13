@@ -131,15 +131,25 @@ export const derivePairedFrameFunction = inngest.createFunction(
     });
 
     const result = await step.run("generate-paired-image", async () => {
+      // Wrap Claude's delta instruction with explicit edit framing. Without this,
+      // Gemini 3 Pro Image often treats the input as a style reference and returns
+      // a near-identical frame instead of applying the modification.
+      const wrappedPrompt = `EDIT the provided image. This is an EDIT operation, NOT a regeneration — the output must be visibly different from the input in the specific ways listed below, while preserving everything not explicitly changed.
+
+CHANGES TO APPLY:
+${editInstruction}
+
+The output should match the input exactly EXCEPT for the changes above. Same camera, same composition, same characters in the same positions and poses — only the listed deltas are modified. Do not redraw the scene from scratch; modify the input image directly.`;
+
       const img = await generateImage({
         apiKey: apiKeys.google,
-        prompt: editInstruction,
+        prompt: wrappedPrompt,
         referenceImages: [anchorImage],
       });
       const keyframeId = crypto.randomUUID();
       const path = `${data.userId}/${data.projectId}/scenes/${data.sceneId}/keyframes/${keyframeId}.png`;
       await uploadAsService(path, img.bytes, img.mimeType);
-      return { keyframeId, path };
+      return { keyframeId, path, wrappedPrompt };
     });
 
     await step.run("persist", async () => {
@@ -155,7 +165,7 @@ export const derivePairedFrameFunction = inngest.createFunction(
         scene_id: data.sceneId,
         role: ctx.derivedRole,
         image_url: result.path,
-        prompt_used: editInstruction,
+        prompt_used: result.wrappedPrompt,
         parent_keyframe_id: ctx.anchorKeyframeId,
         is_current: true,
       });

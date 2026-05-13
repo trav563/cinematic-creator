@@ -89,14 +89,18 @@ export function SceneCard({
   const [showPrompt, setShowPrompt] = useState<"start" | "end" | null>(null);
   const [assetPickerValue, setAssetPickerValue] = useState("");
   // For PAIR scenes the anchor side and derived side each have their own override
-  // and own last-used prompt. We track separate drafts so editing one doesn't
-  // clobber the other. For SINGLE scenes only the anchor draft is used.
-  const anchorPrompt = scene.startPrompt ?? scene.endPrompt ?? "";
-  const derivedPromptValue =
-    scene.frame_role === "PAIR" && scene.pair_anchor === "start"
+  // and own last-used prompt. The anchor's prompt is on whichever frame the
+  // pair_anchor names (start or end); the derived's prompt is on the OPPOSITE side.
+  // For SINGLE scenes only the anchor draft is used (start side).
+  const anchorPrompt =
+    scene.frame_role === "PAIR" && scene.pair_anchor === "end"
       ? scene.endPrompt ?? ""
-      : scene.frame_role === "PAIR" && scene.pair_anchor === "end"
-        ? scene.startPrompt ?? ""
+      : scene.startPrompt ?? "";
+  const derivedPromptValue =
+    scene.frame_role === "PAIR" && scene.pair_anchor === "end"
+      ? scene.startPrompt ?? ""
+      : scene.frame_role === "PAIR" && scene.pair_anchor === "start"
+        ? scene.endPrompt ?? ""
         : "";
   const [anchorDraft, setAnchorDraft] = useState(
     scene.keyframe_prompt_override ?? anchorPrompt,

@@ -160,17 +160,19 @@ Must NOT include: ${mustNotInclude.length ? mustNotInclude.join(", ") : "(none s
 
 ${scriptText}`;
 
-  const response = await client.messages.parse({
-    model: "claude-opus-4-7",
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    system,
-    messages: [{ role: "user", content: userMessage }],
-    output_config: {
-      format: zodOutputFormat(ParsedScriptSchema),
-      effort: "high",
-    },
-  });
+  const response = await client.messages
+    .stream({
+      model: "claude-opus-4-7",
+      max_tokens: 16000,
+      thinking: { type: "adaptive" },
+      system,
+      messages: [{ role: "user", content: userMessage }],
+      output_config: {
+        format: zodOutputFormat(ParsedScriptSchema),
+        effort: "high",
+      },
+    })
+    .finalMessage();
 
   if (!response.parsed_output) {
     throw new Error("Claude returned a response that failed schema validation.");
@@ -345,17 +347,19 @@ ${args.assets.map((a) => `- ${a.name} [${a.kind}]${a.role ? ` (${a.role})` : ""}
 # Existing rough scene outline (refine or replace as needed)
 ${args.existingScenes.map((s) => `${s.scene_number}. [${s.act ?? "?"}] ${s.description}`).join("\n")}`;
 
-  const response = await client.messages.parse({
-    model: "claude-opus-4-7",
-    max_tokens: 24000,
-    thinking: { type: "adaptive" },
-    system,
-    messages: [{ role: "user", content: userMessage }],
-    output_config: {
-      format: zodOutputFormat(StoryboardSchema),
-      effort: "high",
-    },
-  });
+  const response = await client.messages
+    .stream({
+      model: "claude-opus-4-7",
+      max_tokens: 24000,
+      thinking: { type: "adaptive" },
+      system,
+      messages: [{ role: "user", content: userMessage }],
+      output_config: {
+        format: zodOutputFormat(StoryboardSchema),
+        effort: "high",
+      },
+    })
+    .finalMessage();
 
   if (!response.parsed_output) {
     throw new Error("Storyboard generation returned no valid structured output.");
@@ -512,17 +516,19 @@ Before writing each prompt, ask yourself:
 
 Write motion prompts that feel inevitable for this story, not generic.`;
 
-  const response = await client.messages.parse({
-    model: "claude-opus-4-7",
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    system,
-    messages: [{ role: "user", content: userMessage }],
-    output_config: {
-      format: zodOutputFormat(MotionPromptsSchema),
-      effort: "high",
-    },
-  });
+  const response = await client.messages
+    .stream({
+      model: "claude-opus-4-7",
+      max_tokens: 16000,
+      thinking: { type: "adaptive" },
+      system,
+      messages: [{ role: "user", content: userMessage }],
+      output_config: {
+        format: zodOutputFormat(MotionPromptsSchema),
+        effort: "high",
+      },
+    })
+    .finalMessage();
 
   if (!response.parsed_output) {
     throw new Error("Motion prompt generation returned no valid structured output.");
@@ -612,17 +618,19 @@ Referenced assets: ${args.referencedAssetNames.join(", ") || "(none)"}
 
 Compose the Gemini edit instruction now. Return only the instruction string in the requested schema.`;
 
-  const response = await client.messages.parse({
-    model: "claude-opus-4-7",
-    max_tokens: 4000,
-    thinking: { type: "adaptive" },
-    system,
-    messages: [{ role: "user", content: userMessage }],
-    output_config: {
-      format: zodOutputFormat(PairedFrameEditSchema),
-      effort: "high",
-    },
-  });
+  const response = await client.messages
+    .stream({
+      model: "claude-opus-4-7",
+      max_tokens: 4000,
+      thinking: { type: "adaptive" },
+      system,
+      messages: [{ role: "user", content: userMessage }],
+      output_config: {
+        format: zodOutputFormat(PairedFrameEditSchema),
+        effort: "high",
+      },
+    })
+    .finalMessage();
 
   if (!response.parsed_output) {
     throw new Error("Paired-frame edit instruction generation returned no valid output.");

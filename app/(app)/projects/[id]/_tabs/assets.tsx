@@ -141,8 +141,10 @@ export async function AssetsTab({ projectId }: { projectId: string }) {
   const totalAssets = enriched.length;
   const confirmedAssets = enriched.filter((a) => a.confirmed_variation_id).length;
   const generatedAssets = enriched.filter((a) => a.variations.length > 0).length;
+  // Matches the eligibility filter in generateAllAssetVariations: refs uploaded AND
+  // not yet confirmed. Confirmed assets stay untouched on bulk runs.
   const eligibleForBulk = enriched.filter(
-    (a) => a.refs.length > 0 && a.variations.length === 0,
+    (a) => a.refs.length > 0 && !a.confirmed_variation_id,
   ).length;
 
   return (

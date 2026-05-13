@@ -186,37 +186,47 @@ export async function generateAllAssetVariations(
     return { ok: false, error: "Add a Google AI Studio API key at Settings → API Keys first." };
   }
 
-  // Pull all assets + their existing variations to determine which need generation.
+  // Eligible = has refs uploaded AND not yet confirmed. Imported assets and assets
+  // you've already picked a winner for stay untouched. Assets that have unconfirmed
+  // variations are still eligible — re-running just appends another batch to pick from.
   const { data: assets } = await supabase
     .from("assets")
-    .select(
-      `
-      id,
-      name,
-      reference_image_urls,
-      asset_variations!asset_variations_asset_id_fkey(id)
-    `,
-    )
+    .select("id, name, reference_image_urls, confirmed_variation_id")
     .eq("project_id", projectId);
 
   type AssetRow = {
     id: string;
     name: string;
     reference_image_urls: string[] | null;
-    asset_variations: { id: string }[] | null;
+    confirmed_variation_id: string | null;
   };
-  const eligible: AssetRow[] = ((assets ?? []) as AssetRow[]).filter((a) => {
-    const refs = a.reference_image_urls ?? [];
-    const variations = a.asset_variations ?? [];
-    return refs.length > 0 && variations.length === 0;
-  });
-  const skipped = (assets?.length ?? 0) - eligible.length;
+  const all = (assets ?? []) as AssetRow[];
+  const eligible = all.filter(
+    (a) => (a.reference_image_urls ?? []).length > 0 && !a.confirmed_variation_id,
+  );
+  const noRefs = all.filter((a) => (a.reference_image_urls ?? []).length === 0).length;
+  const alreadyConfirmed = all.filter((a) => a.confirmed_variation_id).length;
+  const skipped = all.length - eligible.length;
 
   if (eligible.length === 0) {
+    if (all.length === 0) {
+      return { ok: false, error: "No assets in this project yet." };
+    }
+    if (noRefs > 0 && alreadyConfirmed > 0) {
+      return {
+        ok: false,
+        error: `Nothing to generate. ${alreadyConfirmed} asset(s) already confirmed, ${noRefs} have no reference images uploaded.`,
+      };
+    }
+    if (alreadyConfirmed === all.length) {
+      return {
+        ok: false,
+        error: `All ${all.length} assets are already confirmed. Use Regenerate on individual cards if you want fresh variations.`,
+      };
+    }
     return {
       ok: false,
-      error:
-        "Nothing to generate. Every asset either has no reference images uploaded yet, or already has variations.",
+      error: `Nothing to generate. ${noRefs} asset(s) have no reference images uploaded yet — add references first, then bulk-generate.`,
     };
   }
 

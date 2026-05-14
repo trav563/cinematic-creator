@@ -98,6 +98,68 @@ export async function saveDerivedFramePromptOverride(
 }
 
 /**
+ * For PAIR scenes: clear the derived (non-anchor) keyframe pointer so the next video
+ * generation falls back to single-frame mode using only the anchor — no image_tail
+ * sent to Kling. The frame_role stays PAIR so the user can re-derive later via the
+ * existing "Derive [side] from anchor" button. The keyframe row itself isn't deleted
+ * — it's just unflagged from is_current and unhooked from the scene pointer, so it
+ * stays in the version history (and is harmless / unreferenced).
+ *
+ * Note: derive-paired-frame.ts NEVER updates current_keyframe_id, only generate-
+ * keyframe does. So after this action runs, current_keyframe_id still points at the
+ * anchor — exactly what the SINGLE-path video worker needs.
+ */
+export async function removePairedFrame(sceneId: string): Promise<Result> {
+  const supabase = await createSupabaseServerClient();
+  const { data: scene } = await supabase
+    .from("scenes")
+    .select(
+      "id, project_id, frame_role, pair_anchor, current_start_keyframe_id, current_end_keyframe_id",
+    )
+    .eq("id", sceneId)
+    .single();
+  if (!scene) return { ok: false, error: "Scene not found" };
+  if (scene.frame_role !== "PAIR") {
+    return { ok: false, error: "Only PAIR scenes have a paired frame to remove." };
+  }
+  if (!scene.pair_anchor) {
+    return {
+      ok: false,
+      error: "Scene is missing pair_anchor — regenerate the storyboard first.",
+    };
+  }
+
+  const derivedRole: "start" | "end" = scene.pair_anchor === "start" ? "end" : "start";
+  const derivedKeyframeId =
+    derivedRole === "start"
+      ? scene.current_start_keyframe_id
+      : scene.current_end_keyframe_id;
+  if (!derivedKeyframeId) {
+    return { ok: false, error: "No paired frame to remove — only the anchor exists." };
+  }
+
+  // Clear the scene's pointer to the derived frame.
+  const update: Record<string, unknown> =
+    derivedRole === "start"
+      ? { current_start_keyframe_id: null }
+      : { current_end_keyframe_id: null };
+  const { error: updateErr } = await supabase
+    .from("scenes")
+    .update(update)
+    .eq("id", sceneId);
+  if (updateErr) return { ok: false, error: updateErr.message };
+
+  // Demote the keyframe row from is_current so version history stays clean.
+  await supabase
+    .from("scene_keyframes")
+    .update({ is_current: false })
+    .eq("id", derivedKeyframeId);
+
+  revalidatePath(`/projects/${scene.project_id}`);
+  return { ok: true };
+}
+
+/**
  * Delete a scene and its associated keyframes / videos via FK cascade. Leaves a gap
  * in scene_number — deliberately, since renumbering risks unique-constraint races
  * and the gap is harmless (next-scene adjacency in motion prompts uses ORDER BY

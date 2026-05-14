@@ -20,6 +20,7 @@ import {
   saveScenePromptOverride,
   saveDerivedFramePromptOverride,
   deleteScene,
+  removePairedFrame,
 } from "./storyboard-actions";
 
 interface ActiveJob {
@@ -276,6 +277,19 @@ export function SceneCard({
         toast.success(
           "Derived override cleared — Claude will compose the edit instruction next time.",
         );
+    });
+  }
+
+  function handleRemovePairedFrame() {
+    const derivedSide: "start" | "end" = scene.pair_anchor === "start" ? "end" : "start";
+    const confirmed = window.confirm(
+      `Remove the ${derivedSide} (derived) frame? The anchor frame stays. The next video generation for this scene will use only the anchor and skip image_tail (no start→end interpolation). You can re-derive later if you change your mind.`,
+    );
+    if (!confirmed) return;
+    startTransition(async () => {
+      const result = await removePairedFrame(scene.id);
+      if (!result.ok) toast.error(result.error);
+      else toast.success(`Paired ${derivedSide} frame removed.`);
     });
   }
 
@@ -738,6 +752,17 @@ export function SceneCard({
               {hasDerived
                 ? `Re-derive ${derivedSide}`
                 : `Derive ${derivedSide} from anchor`}
+            </Button>
+          )}
+          {isPair && hasDerived && (
+            <Button
+              variant="secondary"
+              onClick={handleRemovePairedFrame}
+              disabled={isPending || isGenerating}
+              className="text-xs"
+              title="Remove the derived frame so video generation uses only the anchor (no start→end interpolation)."
+            >
+              Remove {derivedSide}
             </Button>
           )}
           {hasAnchor && (

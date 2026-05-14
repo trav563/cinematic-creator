@@ -2,6 +2,7 @@ import { inngest } from "../client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getProviderKey } from "@/lib/providers/keys";
 import { generateMotionPrompts } from "@/lib/providers/claude";
+import { downloadAsServiceBase64 } from "@/lib/storage";
 import type { StylePreset } from "@/lib/prompts/loader";
 
 export interface GenerateMotionPromptsEventData {
@@ -44,7 +45,7 @@ export const generateMotionPromptsFunction = inngest.createFunction(
       const { data: scenes } = await supabase
         .from("scenes")
         .select(
-          "id, scene_number, act, beat, camera, frame_role, anchor_direction, description, keyframe_prompt_override",
+          "id, scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, keyframe_prompt_override, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id",
         )
         .eq("project_id", data.projectId)
         .order("scene_number");
@@ -58,6 +59,55 @@ export const generateMotionPromptsFunction = inngest.createFunction(
 
       return { project, scenes, characters: characters ?? [] };
     });
+
+    // Load the anchor keyframe per scene as base64 so Claude sees the actual visual.
+    // For PAIR scenes the anchor is whichever side pair_anchor names; for SINGLE it's
+    // current_keyframe_id. Scenes without a keyframe yet are skipped — Claude falls
+    // back to the textual description for those.
+    const keyframeImages = await step.run("load-keyframes", async () => {
+      const map = new Map<number, { base64: string; mimeType: string }>();
+      const idsBySceneNumber = new Map<number, string>();
+      for (const s of ctx.scenes) {
+        const id =
+          s.frame_role === "PAIR" && s.pair_anchor === "end"
+            ? s.current_end_keyframe_id
+            : s.current_start_keyframe_id ?? s.current_keyframe_id;
+        if (id) idsBySceneNumber.set(s.scene_number, id);
+      }
+      const ids = Array.from(idsBySceneNumber.values());
+      if (ids.length === 0) return Array.from(map.entries());
+
+      const { data: kfs } = await supabase
+        .from("scene_keyframes")
+        .select("id, image_url")
+        .in("id", ids);
+      const pathById = new Map((kfs ?? []).map((k) => [k.id, k.image_url]));
+
+      // Download in parallel; tolerate per-scene failures.
+      const entries = await Promise.all(
+        Array.from(idsBySceneNumber.entries()).map(async ([sceneNumber, kfId]) => {
+          const path = pathById.get(kfId);
+          if (!path) return null;
+          try {
+            const img = await downloadAsServiceBase64(path);
+            return [sceneNumber, img] as const;
+          } catch (err) {
+            console.warn(
+              `[generate-motion-prompts] skipped keyframe for scene ${sceneNumber}:`,
+              err,
+            );
+            return null;
+          }
+        }),
+      );
+      // Return as array of tuples — Inngest serializes step output as JSON, and Map
+      // objects don't survive that round-trip. We rebuild the Map after the step.
+      return entries.filter((e): e is readonly [number, { base64: string; mimeType: string }] => e !== null);
+    });
+
+    const keyframeImageMap = new Map<number, { base64: string; mimeType: string }>(
+      keyframeImages,
+    );
 
     const apiKey = await step.run("fetch-key", () =>
       getProviderKey(data.userId, "anthropic"),
@@ -84,6 +134,7 @@ export const generateMotionPromptsFunction = inngest.createFunction(
           description: s.description,
           keyframe_prompt_override: s.keyframe_prompt_override,
         })),
+        keyframeImages: keyframeImageMap,
       });
     });
 

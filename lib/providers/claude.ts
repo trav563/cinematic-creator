@@ -412,6 +412,13 @@ interface GenerateMotionPromptsArgs {
      */
     keyframe_prompt_override?: string | null;
   }>;
+  /**
+   * Per-scene keyframe images (anchor side for PAIR scenes, single keyframe for SINGLE).
+   * Keyed by scene_number. When provided, Claude sees the actual visual and grounds
+   * the motion prompt in what's on screen rather than inferring from the description.
+   * Scenes without an entry (no keyframe generated yet) fall back to text-only context.
+   */
+  keyframeImages?: Map<number, { base64: string; mimeType: string }>;
 }
 
 export async function generateMotionPrompts(args: GenerateMotionPromptsArgs): Promise<MotionPrompts> {
@@ -456,6 +463,7 @@ The project's motion vocabulary above is non-negotiable. Every prompt's leading 
    - **PAIR-END**: climactic delivery — the explosion, the impact, the reveal happens. The clip should land the moment.
 9. **Project identity is non-negotiable** — the rendering identity and motion vocabulary at the TOP of this prompt are the source of truth. Cinematic blockbuster wants ARRI-style anamorphic moves; videogame_gameplay wants in-engine camera (behind-shoulder follow / first-person bob / lock-on snap); animated_film wants expressive over-cranked motion. If the project is gameplay or animated, NEVER use cinematic film verbs in the motion prompt.
 10. **User keyframe overrides are AUTHORITATIVE.** When a scene includes a "[USER KEYFRAME PROMPT OVERRIDE]" block, that text describes the still image the user has prompt-engineered for the keyframe. The motion prompt must animate FROM that still — visual specifics in the override (composition, character placement, lighting, atmosphere, what's on screen) take priority over the brief Action line. Build your sub-beats around what the override says is in the frame.
+10b. **THE ATTACHED KEYFRAME IMAGE IS THE GROUND TRUTH.** When a scene has its keyframe image attached below the text block, that image — NOT the textual description — is what Kling will actually animate. Look at the image. Note the actual composition, character pose, what's in the foreground vs background, the lighting direction, the atmosphere, what objects are visible. Your motion prompt MUST match what is in the image: don't write about a sword being drawn if the image shows a character standing still; don't write about an explosion if the image is calm. The text description is a guide; the image is the truth. If the image shows something different from the description, trust the IMAGE.
 11. **Story coherence (non-negotiable)** — every motion prompt must serve the trailer's emotional arc and the scene's role in the larger structure. Random or generic animation breaks the trailer.
    - Read the locked brief, the emotional arc, and the recurring motif before writing any prompts. Identify the trailer's hook, escalation, climax, and resolution. Each scene's motion must reinforce its position in that arc.
    - **Pacing**: act 1 / opening = slower, contemplative motion (gentle drifts, slow push-ins, atmospheric stillness). Act 2 = building energy (faster cuts of motion, more aggressive camera moves). Climax = peak intensity (whip pans, hard impacts, rapid motion). Title / resolution = controlled stillness or final exhale.
@@ -483,7 +491,10 @@ Verify before responding — every prompt must satisfy ALL of:
 
 If any prompt feels generic or could apply to a different scene equally well, REWRITE IT before responding.`;
 
-  const userMessage = `# Project context
+  // Build the user message as a content array so we can interleave each scene's
+  // text block with its keyframe image. Claude treats attached images as ground
+  // truth for what Kling will actually animate.
+  const intro = `# Project context
 Scope: ${args.scopeName ?? "(unspecified)"}
 Genre: ${args.genre ?? "(unspecified)"}
 Emotional arc: ${args.emotionalArc ?? "(unspecified)"}
@@ -505,28 +516,63 @@ ${
 }
 
 # Scenes (${args.scenes.length}) — full sequence, in order
-${args.scenes
-  .map(
-    (s) =>
-      `${s.scene_number}. [${s.act ?? "?"} · ${s.frame_role}${s.anchor_direction ? ` · ${s.anchor_direction}` : ""}]
+Each scene is presented as a text block followed by its keyframe image (when generated). The image is the ACTUAL still Kling will animate — ground your motion prompt in what you see, not in the textual description alone.`;
+
+  type ContentBlock =
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        source: { type: "base64"; media_type: "image/png" | "image/jpeg" | "image/webp" | "image/gif"; data: string };
+      };
+  const content: ContentBlock[] = [{ type: "text", text: intro }];
+
+  for (const s of args.scenes) {
+    const sceneText = `
+
+---
+Scene ${s.scene_number}. [${s.act ?? "?"} · ${s.frame_role}${s.anchor_direction ? ` · ${s.anchor_direction}` : ""}]
    Camera: ${s.camera ?? "(unspecified)"}
    Beat: ${s.beat ?? "(unspecified)"}
    Action: ${s.description}${
      s.keyframe_prompt_override
        ? `\n   [USER KEYFRAME PROMPT OVERRIDE — this is what the visual will ACTUALLY look like. Trust this over the action line above for visual specifics. Your motion prompt must move FROM this still into a believable 5-10s motion arc.]\n   ${s.keyframe_prompt_override.replace(/\n/g, "\n   ")}`
        : ""
-   }`,
-  )
-  .join("\n\n")}
+   }`;
+    content.push({ type: "text", text: sceneText });
 
-# Final reminder
+    const img = args.keyframeImages?.get(s.scene_number);
+    if (img) {
+      const mt = img.mimeType.startsWith("image/")
+        ? (img.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif")
+        : "image/png";
+      content.push({
+        type: "image",
+        source: { type: "base64", media_type: mt, data: img.base64 },
+      });
+      content.push({
+        type: "text",
+        text: `   [↑ Scene ${s.scene_number} keyframe — this is the ground truth visual. Match your motion prompt to what you actually see.]`,
+      });
+    } else {
+      content.push({
+        type: "text",
+        text: `   [No keyframe generated yet for scene ${s.scene_number} — write the motion prompt from the textual description.]`,
+      });
+    }
+  }
+
+  content.push({
+    type: "text",
+    text: `\n\n# Final reminder
 Before writing each prompt, ask yourself:
+- What does the keyframe image actually show? (Trust the image over the description when they conflict.)
 - What is THIS scene's role in the trailer's arc (hook / setup / escalation / climax / resolution)?
 - How does its motion contrast with the scenes immediately before and after?
 - Does the recurring motif (if any) belong in this scene?
 - Is the camera move appropriate for the act-level energy, not just the literal action?
 
-Write motion prompts that feel inevitable for this story, not generic.`;
+Write motion prompts that feel inevitable for this story AND match what the image actually shows.`,
+  });
 
   const response = await client.messages
     .stream({
@@ -534,7 +580,7 @@ Write motion prompts that feel inevitable for this story, not generic.`;
       max_tokens: 16000,
       thinking: { type: "adaptive" },
       system,
-      messages: [{ role: "user", content: userMessage }],
+      messages: [{ role: "user", content }],
       output_config: {
         format: zodOutputFormat(MotionPromptsSchema),
         effort: "high",

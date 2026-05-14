@@ -201,7 +201,7 @@ export async function regenerateSceneMotionPrompt(
   const { data: scene } = await supabase
     .from("scenes")
     .select(
-      "id, scene_number, act, beat, camera, frame_role, anchor_direction, description, project_id",
+      "id, scene_number, act, beat, camera, frame_role, pair_anchor, anchor_direction, description, project_id, current_keyframe_id, current_start_keyframe_id, current_end_keyframe_id",
     )
     .eq("id", sceneId)
     .single();
@@ -231,7 +231,34 @@ export async function regenerateSceneMotionPrompt(
   try {
     const apiKey = await getProviderKey(userData.user.id, "anthropic");
     const { generateMotionPrompts } = await import("@/lib/providers/claude");
+    const { downloadAsServiceBase64 } = await import("@/lib/storage");
     const presetOptions = (project.style_preset_options ?? {}) as { subMode?: string };
+
+    // Load just the target scene's keyframe for image-grounded re-roll. We could
+    // load all scenes' keyframes for richer context but that's expensive on every
+    // re-roll. Single image is enough — the textual context for the others still
+    // gives Claude the trailer arc.
+    const targetKfId =
+      scene.frame_role === "PAIR" && scene.pair_anchor === "end"
+        ? scene.current_end_keyframe_id
+        : scene.current_start_keyframe_id ?? scene.current_keyframe_id;
+    let keyframeImages: Map<number, { base64: string; mimeType: string }> | undefined;
+    if (targetKfId) {
+      const { data: kf } = await supabase
+        .from("scene_keyframes")
+        .select("image_url")
+        .eq("id", targetKfId)
+        .single();
+      if (kf) {
+        try {
+          const img = await downloadAsServiceBase64(kf.image_url);
+          keyframeImages = new Map([[scene.scene_number, img]]);
+        } catch (err) {
+          console.warn("[regenerateSceneMotionPrompt] failed to load keyframe:", err);
+        }
+      }
+    }
+
     const result = await generateMotionPrompts({
       apiKey,
       stylePreset: (project.style_preset ?? "cinematic_blockbuster") as
@@ -254,6 +281,7 @@ export async function regenerateSceneMotionPrompt(
         anchor_direction: s.anchor_direction,
         description: s.description,
       })),
+      keyframeImages,
     });
     const match = result.prompts.find((p) => p.scene_number === scene.scene_number);
     if (!match) return { ok: false, error: "Claude didn't return a prompt for this scene" };
